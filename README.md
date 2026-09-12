@@ -179,6 +179,7 @@ Reads conversation/event data.
 | `stop_reason` | VARCHAR | Claude API stop reason (NULL for Grok) |
 | `reasoning_effort` | VARCHAR | Grok-only: per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other sources |
 | `repository` | VARCHAR | GitHub repository (Copilot; Grok from `summary.git_remotes[0]`) |
+| `file_path` | VARCHAR | Absolute path of the transcript or store file (as `read_plans.file_path`) |
 
 **Message type mappings:**
 
