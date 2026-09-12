@@ -139,11 +139,42 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_copilot', source='unknow
 # Column count validation (correct number of columns)
 # ============================================================
 
-# Conversations: 29 columns (includes reasoning_tokens + reasoning_effort)
+# Conversations: 30 columns (includes file_path + reasoning_tokens + reasoning_effort)
 query I
-SELECT COUNT(*) FROM (
-    SELECT * FROM read_conversations(path='test/data_claude') LIMIT 0
-) sub;
+SELECT COUNT(*) = 30 FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
+----
+true
+
+# Additive file_path: prior ordinals preserved (is_agent stays at position 6);
+# file_path is appended as column 30.
+query I
+WITH cols AS (
+  SELECT list(column_name) AS names
+  FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'))
+)
+SELECT names[6] = 'is_agent'
+   AND names[29] = 'repository'
+   AND names[30] = 'file_path'
+FROM cols;
+----
+true
+
+# Relative TVF paths yield absolute file_path for every provider fixture
+query I
+WITH providers AS (
+  SELECT * FROM read_conversations(path='test/data_claude')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_claude_desktop')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_copilot')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_codex')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_gemini')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_grok')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_cursor')
+)
+SELECT COUNT(*) FROM providers
+WHERE file_path IS NULL OR file_path = ''
+   OR starts_with(file_path, 'test/')
+   OR starts_with(file_path, './')
+   OR NOT ends_with(file_path, file_name);
 ----
 0
 

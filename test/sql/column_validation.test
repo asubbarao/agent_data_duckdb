@@ -347,6 +347,28 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_grok') WHERE uuid IS NUL
 ----
 0
 
+# file_path is absolute provenance; Grok basenames collide so paths must be unique per session
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
+WHERE file_path IS NULL OR file_path = '' OR typeof(file_path) != 'VARCHAR';
+----
+0
+
+# Relative path='test/data_grok' must not leak into file_path values
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
+WHERE starts_with(file_path, 'test/')
+   OR starts_with(file_path, './')
+   OR NOT ends_with(file_path, file_name);
+----
+0
+
+query I
+SELECT COUNT(DISTINCT file_path) = COUNT(DISTINCT session_id)
+FROM read_conversations(path='test/data_grok');
+----
+true
+
 # Tokens only on the session that has updates.jsonl turn_completed usage
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_grok')

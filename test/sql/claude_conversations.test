@@ -143,6 +143,22 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_claude') WHERE file_name
 ----
 0
 
+# file_path never empty (absolute transcript path)
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
+WHERE file_path IS NULL OR file_path = '';
+----
+0
+
+# Relative TVF path arg still yields absolute file_path (not a relative leftover)
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
+WHERE starts_with(file_path, 'test/')
+   OR starts_with(file_path, './')
+   OR NOT ends_with(file_path, file_name);
+----
+0
+
 # message_type never NULL
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude') WHERE message_type IS NULL;
