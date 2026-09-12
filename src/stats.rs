@@ -1,5 +1,7 @@
 use crate::detect::{self, Provider};
+use crate::codex_store::{self, CodexSurface};
 use crate::types::claude::StatsCache;
+use crate::types::codex::{CodexLine, CodexResponseItem};
 use crate::utils;
 use crate::vtab::{self, ColDef, TableFunc};
 use duckdb::core::DataChunkHandle;
@@ -16,6 +18,114 @@ pub struct StatsRow {
 pub struct Stats;
 
 impl Stats {
+    /// Codex CLI has no stats-cache file. Aggregate its canonical rollout
+    /// messages and function calls by session start day without double-counting
+    /// the event-message fallback copies.
+    fn load_codex_rows(base_path: &std::path::Path) -> Vec<StatsRow> {
+        let mut by_date: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
+
+        for (_session_id, file_path) in utils::discover_codex_rollout_files(base_path) {
+            let file = match std::fs::File::open(file_path) {
+                Ok(file) => file,
+                Err(_) => continue,
+            };
+            let mut date = None;
+            let mut canonical_messages = 0i64;
+            let mut fallback_messages = 0i64;
+            let mut tool_calls = 0i64;
+
+            for line in std::io::BufRead::lines(std::io::BufReader::new(file)).map_while(Result::ok) {
+                let Ok(line) = serde_json::from_str::<CodexLine>(&line) else {
+                    continue;
+                };
+                if date.is_none() {
+                    date = line.timestamp.as_deref().and_then(utils::iso_date);
+                }
+                match line.line_type.as_str() {
+                    "response_item" => {
+                        let Ok(item) = serde_json::from_value::<CodexResponseItem>(line.payload) else {
+                            continue;
+                        };
+                        match item.item_type.as_deref() {
+                            Some("message") if matches!(item.role.as_deref(), Some("user" | "assistant")) => {
+                                canonical_messages += 1;
+                            }
+                            Some("function_call") => tool_calls += 1,
+                            _ => {}
+                        }
+                    }
+                    "event_msg" => {
+                        let event_type = line.payload.get("type").and_then(|value| value.as_str());
+                        if matches!(event_type, Some("user_message" | "agent_message")) {
+                            fallback_messages += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let Some(date) = date else {
+                continue;
+            };
+            let entry = by_date.entry(date).or_insert((0, 0, 0));
+            entry.0 += if canonical_messages > 0 {
+                canonical_messages
+            } else {
+                fallback_messages
+            };
+            entry.1 += 1;
+            entry.2 += tool_calls;
+        }
+
+        by_date
+            .into_iter()
+            .map(|(date, (message_count, session_count, tool_call_count))| StatsRow {
+                source: "codex".to_string(),
+                date,
+                message_count,
+                session_count,
+                tool_call_count,
+            })
+            .collect()
+    }
+
+    fn load_codex_surface_rows(
+        base_path: &std::path::Path,
+        surface: CodexSurface,
+    ) -> Vec<StatsRow> {
+        let store = codex_store::read_codex_thread_store(base_path, surface);
+        let mut by_date: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
+
+        for thread in store.threads.values() {
+            if let Some(date) = utils::unix_ms_to_date(thread.created_at_ms) {
+                by_date.entry(date).or_insert((0, 0, 0)).1 += 1;
+            }
+        }
+        for item in store.items {
+            let Some(date) = utils::unix_ms_to_date(item.created_at_ms) else {
+                continue;
+            };
+            let entry = by_date.entry(date).or_insert((0, 0, 0));
+            match item.item_type.as_str() {
+                "userMessage" | "agentMessage" => entry.0 += 1,
+                "commandExecution" | "mcpToolCall" | "webSearch" | "fileChange"
+                | "collabAgentToolCall" => entry.2 += 1,
+                _ => {}
+            }
+        }
+
+        by_date
+            .into_iter()
+            .map(|(date, (message_count, session_count, tool_call_count))| StatsRow {
+                source: surface.source_label().to_string(),
+                date,
+                message_count,
+                session_count,
+                tool_call_count,
+            })
+            .collect()
+    }
+
     /// Grok has no stats-cache.json. Roll up per-session `signals.json` (+
     /// summary fallbacks) into the existing daily stats columns — one row per
     /// date, rejectable by maintainers (no new table function).
@@ -109,12 +219,15 @@ impl TableFunc for Stats {
                 }).collect()
             }
             Provider::Grok => Self::load_grok_rows(&base_path),
-            // Only Claude ships stats-cache.json; Grok rolls up signals.json.
-            // Other providers: derive in SQL from read_conversations() instead.
+            Provider::Codex => Self::load_codex_rows(&base_path),
+            Provider::CodexWork => Self::load_codex_surface_rows(&base_path, CodexSurface::Work),
+            Provider::CodexRemote => Self::load_codex_surface_rows(&base_path, CodexSurface::Remote),
+            Provider::CodexChat => Self::load_codex_surface_rows(&base_path, CodexSurface::Chat),
+            // Only Claude ships stats-cache.json; Grok and Codex roll up their
+            // own durable local stores. Other providers derive in SQL.
             Provider::ClaudeDesktop
             | Provider::Copilot
             | Provider::Cursor
-            | Provider::Codex
             | Provider::Gemini
             | Provider::Unknown => Vec::new(),
         }

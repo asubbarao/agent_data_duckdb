@@ -2,7 +2,7 @@
 
 A [DuckDB extension](https://duckdb.org/community_extensions/list_of_extensions) written in Rust for querying, analysing and inspecting AI coding agents history. Read conversations, plans, todos, history, and usage stats directly from your local agent data directories.
 
-**Supported agents:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`~/.claude`), Claude Desktop ("Cowork", `~/Library/Application Support/Claude`), [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (`~/.copilot`), [Cursor](https://cursor.com) (`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`, `source='cursor'`), [OpenAI Codex CLI](https://openai.com/codex) (`~/.codex`, `source='codex'`), [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`~/.gemini`) and [xAI Grok CLI](https://x.ai) (`~/.grok`, `source='grok'`).
+**Supported agents:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`~/.claude`), Claude Desktop ("Cowork", `~/Library/Application Support/Claude`), [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (`~/.copilot`), [Cursor](https://cursor.com) (`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`, `source='cursor'`), [OpenAI Codex](https://openai.com/codex) CLI (`~/.codex`, `source='codex'`) and local Work threads (`source='codex-work'`), [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`~/.gemini`) and [xAI Grok CLI](https://x.ai) (`~/.grok`, `source='grok'`).
 
 Written in 🦀 Rust.
 
@@ -104,10 +104,10 @@ When called **without arguments**, each function reads from its provider's defau
 | Function | Default path | Detected as |
 |----------|-------------|-------------|
 | `read_conversations()` | `~/.claude` | Claude Code |
-| `read_plans()` | `~/.claude` | Claude Code |
-| `read_todos()` | `~/.claude` | Claude Code |
-| `read_history()` | `~/.claude` | Claude Code |
-| `read_stats()` | `~/.claude` | Claude Code |
+| `read_plans()` | `~/.claude` | Claude Code, Copilot, Grok, Codex CLI, Codex Work |
+| `read_todos()` | `~/.claude` | Claude Code, Copilot, Codex CLI, Codex Work |
+| `read_history()` | `~/.claude` | Claude Code, Copilot, Codex CLI, Codex Work |
+| `read_stats()` | `~/.claude` | Claude Code, Grok, Codex CLI, Codex Work |
 
 To read Claude Desktop, Copilot, or Gemini data, pass the path explicitly:
 
@@ -121,19 +121,20 @@ FROM read_conversations(path='~/.gemini');  -- detected as Gemini CLI
 
 All functions accept two optional parameters:
 - **`path`** — data directory path (default: `~/.claude`). Auto-detected from folder structure (`local-agent-mode-sessions/` → Claude Desktop, `projects/` → Claude, `session-state/` → Copilot, a `state.vscdb` file → Cursor, `sessions/<YYYY>/` → Codex, `tmp/` + `installation_id` → Gemini CLI, `sessions/<%encoded-cwd>/` → Grok). Grok lives at `~/.grok`, so pass `path='~/.grok'` (or `source='grok'`).
-- **`source`** — explicit provider override: `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`. Use when auto-detection fails or for non-standard directory layouts.
+- **`source`** — explicit provider override: `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'` (or `'codex-cli'`), `'codex-work'`, `'codex-remote'`, `'codex-chat'`, `'gemini'`, or `'grok'`. Use when auto-detection fails or for non-standard directory layouts.
 
-Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`) as the first column.
+Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'codex-work'`, `'codex-remote'`, `'codex-chat'`, `'gemini'`, or `'grok'`) as the first column.
 
 > **Cursor** support is gated behind the default-on `cursor` cargo feature. It reads `state.vscdb` with a self-contained, pure-Rust, read-only SQLite reader (`src/vscdb.rs`) — no external dependency and no bundled C SQLite, so every target arch (including `windows_amd64_mingw`) builds with negligible size overhead. Build with `--no-default-features` to drop it. Only `read_conversations()` is implemented for Cursor; the other tables return no rows for `source='cursor'`.
 
-> **Codex** conversation data is read **only** from `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. The `~/.codex/*.sqlite` files (app automation / logging / inbox) are intentionally ignored. Codex has no extra build dependencies.
+> **Codex CLI** (`source='codex'`) reads canonical rollout JSONL, `history.jsonl`, and derives daily stats without counting `event_msg` fallback copies. **Codex Work** (`source='codex-work'`) reads the separate local thread projection in `state_5.sqlite` and `thread_history_1.sqlite`, including conversations, plans, checklist todos, prompt history, and daily stats. `codex-remote` and `codex-chat` use the same projection only when Codex writes threads with those source labels; they never scrape Chromium browser cache or invent a cloud API. Codex has no extra build dependencies.
 
 > **Grok** has no extra build dependencies. Transcripts live at
 > `~/.grok/sessions/<%encoded-cwd>/<session-uuid>/chat_history.jsonl` with
 > session metadata in a sibling `summary.json` (and optional `signals.json` for
-> `read_stats`). Grok fills shared columns plus Grok-only `reasoning_effort` and
-> `reasoning_tokens` (see field map). `encrypted_content` is never read.
+> `read_stats`). Grok fills shared columns plus `reasoning_tokens`; its
+> `reasoning_effort` values and Codex `turn_context.effort` share the normalized
+> `reasoning_effort` column (see field map). `encrypted_content` is never read.
 > Token usage is **not** on `chat_history` lines — it comes from the sibling
 > `updates.jsonl` (`sessionUpdate == "turn_completed"` → `usage`).
 
@@ -144,13 +145,14 @@ Reads conversation/event data.
 - **Claude Desktop:** JSONL files from `local-agent-mode-sessions/**/.claude/projects/<project>/<session>.jsonl` (same schema as Claude Code)
 - **Copilot:** JSONL events from `session-state/<uuid>/events.jsonl`
 - **Cursor:** `composerData:*` / `bubbleId:*` rows from `state.vscdb` (read with the pure-Rust `src/vscdb.rs` reader; one composer = one session)
-- **Codex:** JSONL rollout streams from `sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`
+- **Codex CLI:** JSONL rollout streams from `sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`
+- **Codex Work / Remote / Chat:** `state_5.sqlite` thread metadata plus ordered items from `thread_history_1.sqlite`; choose the corresponding explicit source to avoid mixing surfaces
 - **Gemini:** JSON chat checkpoints from `tmp/<project-hash>/chats/session-<ts>-<id>.json` (one file = one session; each tool call is also emitted as a `tool_call` row)
 - **Grok:** JSONL transcripts from `sessions/<%encoded-cwd>/<session-uuid>/chat_history.jsonl`, with session metadata from sibling `summary.json`. **Timestamps** and **token** columns come from sibling `updates.jsonl` (wire event stream — chat_history itself has no time/usage fields). Subagent children linked via `…/<parent>/subagents/<child>/meta.json` set `is_agent=true` (and session-level `parent_uuid`).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'` |
+| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'codex-work'`, `'codex-remote'`, `'codex-chat'`, `'gemini'`, or `'grok'` |
 | `session_id` | VARCHAR | Session UUID |
 | `project_path` | VARCHAR | Project/working directory path |
 | `project_dir` | VARCHAR | Raw encoded directory name (Claude / Grok cwd dir) |
@@ -177,8 +179,10 @@ Reads conversation/event data.
 | `cwd` | VARCHAR | Working directory |
 | `version` | VARCHAR | Agent CLI version (Grok: `summary.chat_format_version` as string) |
 | `stop_reason` | VARCHAR | Claude API stop reason (NULL for Grok) |
-| `reasoning_effort` | VARCHAR | Grok-only: per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other sources |
+| `reasoning_effort` | VARCHAR | Codex `turn_context.effort`; Grok per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other providers |
 | `repository` | VARCHAR | GitHub repository (Copilot; Grok from `summary.git_remotes[0]`) |
+| `client_originator` | VARCHAR | Codex CLI `session_meta.originator`, or the explicit Codex thread-surface label; NULL for other providers |
+| `client_source` | VARCHAR | Codex CLI `session_meta.source`, or Codex thread `source` (for example, `vscode`); NULL for other providers. This does not replace normalized `source`. |
 
 **Message type mappings:**
 
@@ -211,12 +215,12 @@ Reads conversation/event data.
 > | `content` / `summary[].text` | `message_content` | User may be string or `{type,text}` blocks; reasoning uses summary text only (never `encrypted_content`) |
 > | `model_id` (else `summary.current_model_id`) | `model` | |
 > | `tool_calls[].name/id/arguments` | `tool_name` / `tool_use_id` / `tool_input` | One row per call; string or object args → stable string |
-> | `reasoning_effort` (message, else summary) | `reasoning_effort` | Grok-only nullable varchar; `stop_reason` stays NULL |
+> | `reasoning_effort` (message, else summary) | `reasoning_effort` | Nullable varchar; `stop_reason` stays NULL |
 > | `summary.generated_title` | `slug` | Session title |
 > | `summary.chat_format_version` | `version` | Stringified |
 > | `updates.jsonl` `timestamp` (+ kind) | `timestamp` | Unix sec → ISO; cursor-aligned to chat types (`user_message_chunk`→user, `agent_thought_chunk`→reasoning, …). Fallback: summary activity stamp |
 > | `summary.head_branch` / `git_remotes[0]` / `git_root_dir` | `git_branch` / `repository` / `project_path` | |
-> | `reasoning.id`, else synthetic | `uuid` | Prefer real id; else `{session_id}:{line_number}` so uuid is never NULL |
+> | `reasoning.id`, else synthetic | `uuid` | Prefer real id; ordinary rows use `{session_id}:{line_number}`; fan-out `tool_call` rows add `tool_use_id` or `idx{N}` so every emitted record is distinct |
 > | subagent `meta.json` | `is_agent` / `parent_uuid` | Child session → true; parent session id |
 > | `updates.jsonl` `turn_completed.usage.inputTokens` | `input_tokens` | Last usable snapshot; **session/prompt aggregate duplicated on every row** (not per-line) |
 > | `…outputTokens` | `output_tokens` | same |
@@ -230,9 +234,11 @@ Reads conversation/event data.
 > Sessions without `updates.jsonl` (or without `usage`) keep token columns NULL.
 > `cache_creation_tokens` is never set for Grok.
 >
-> **Synthetic uuid form:** `{session_id}:{line_number}` (1-based chat_history line).
-> Multi-row fan-out from one assistant line (text + tool_call rows) shares that
-> line's uuid. Prefer real `reasoning.id` when present.
+> **Synthetic uuid form:** ordinary rows use `{session_id}:{line_number}` (1-based
+> `chat_history` line). A fan-out `tool_call` uses
+> `{session_id}:{line_number}:tool:{tool_use_id}` (or `:tool:idx{N}` when the call
+> has no `id`); `tool_result` and the optional assistant text row retain the base
+> line ID. Prefer real `reasoning.id` when present.
 >
 > **Timestamps:** `chat_history` has no time fields. The CLI clocks live in
 > `updates.jsonl`. The parser walks chat lines and assigns the next matching
@@ -241,18 +247,21 @@ Reads conversation/event data.
 
 ### `read_plans([path], [source])`
 
-Reads plan files.
+Reads plan files and synthesized current plans.
 - **Claude:** `plans/*.md`
 - **Copilot:** `session-state/<uuid>/plan.md`
+- **Grok:** `plan.md` in the session directory
+- **Codex CLI:** The latest `update_plan` function-call snapshot in each rollout session
+- **Codex Work / Remote / Chat:** The latest persisted `plan` item for each matching local thread
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, or `'copilot'` |
-| `session_id` | VARCHAR | Parent session UUID (Copilot only, NULL for Claude) |
-| `plan_name` | VARCHAR | Plan name (filename stem or workspace summary) |
+| `source` | VARCHAR | `'claude'`, `'copilot'`, `'grok'`, `'codex'`, `'codex-work'`, `'codex-remote'`, or `'codex-chat'` |
+| `session_id` | VARCHAR | Parent session UUID (Copilot, Grok, and Codex; NULL for Claude) |
+| `plan_name` | VARCHAR | Plan name (filename stem, session summary, or Codex thread title) |
 | `file_name` | VARCHAR | Full filename |
 | `file_path` | VARCHAR | Absolute file path |
-| `content` | VARCHAR | Full markdown content |
+| `content` | VARCHAR | Full markdown content (Codex CLI is synthesized from its current `update_plan`) |
 | `file_size` | BIGINT | File size in bytes |
 
 ### `read_todos([path], [source])`
@@ -260,10 +269,12 @@ Reads plan files.
 Reads todo/checklist items.
 - **Claude:** `todos/<session>-agent-<agent>.json`
 - **Copilot:** Checkpoint markdown checklists from `session-state/<uuid>/checkpoints/*.md`
+- **Codex CLI:** The latest `update_plan` function-call snapshot in each rollout session
+- **Codex Work / Remote / Chat:** Markdown checklist lines from the latest persisted `plan` item
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, or `'copilot'` |
+| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, `'copilot'`, `'codex'`, `'codex-work'`, `'codex-remote'`, or `'codex-chat'` |
 | `session_id` | VARCHAR | Parent session UUID |
 | `agent_id` | VARCHAR | Agent UUID (Claude only, NULL for Copilot) |
 | `file_name` | VARCHAR | Source filename |
@@ -277,14 +288,16 @@ Reads todo/checklist items.
 Reads command history.
 - **Claude:** `history.jsonl` (structured JSONL)
 - **Copilot:** `command-history-state.json` (simple string array)
+- **Codex CLI:** `history.jsonl` prompts (stored as Unix seconds and normalized to milliseconds)
+- **Codex Work / Remote / Chat:** persisted `userMessage` thread items
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, or `'copilot'` |
+| `source` | VARCHAR | `'claude'`, `'copilot'`, `'codex'`, `'codex-work'`, `'codex-remote'`, or `'codex-chat'` |
 | `line_number` | BIGINT | Line/entry number (1-based) |
-| `timestamp_ms` | BIGINT | Unix timestamp in ms (Claude only) |
-| `project` | VARCHAR | Project path (Claude only) |
-| `session_id` | VARCHAR | Session UUID (Claude only) |
+| `timestamp_ms` | BIGINT | Unix timestamp in ms (Claude and Codex) |
+| `project` | VARCHAR | Project path (Claude and Codex Work projection) |
+| `session_id` | VARCHAR | Session UUID (Claude and Codex) |
 | `display` | VARCHAR | Command/prompt text |
 | `pasted_contents` | VARCHAR | Pasted content as JSON (Claude only) |
 
@@ -296,12 +309,17 @@ Reads daily activity stats.
   `summary.created_at` date into the same columns (no new table function).
   `message_count` = `userMessageCount + assistantMessageCount` (else
   `summary.num_messages`); `tool_call_count` = `signals.toolCallCount`;
-  `session_count` = sessions on that date. Other providers return empty
-  (derive from `read_conversations()` in SQL instead).
+  `session_count` = sessions on that date.
+- **Codex CLI:** rolls up canonical rollout `response_item` user/assistant
+  messages and function calls by session day, excluding duplicate event-message
+  fallback copies.
+- **Codex Work / Remote / Chat:** rolls up persisted local thread items by day.
+  Remote and Chat return empty until Codex persists threads labelled for those
+  surfaces.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `source` | VARCHAR | `'claude'` or `'grok'` |
+| `source` | VARCHAR | `'claude'`, `'grok'`, `'codex'`, `'codex-work'`, `'codex-remote'`, or `'codex-chat'` |
 | `date` | VARCHAR | Date (YYYY-MM-DD) |
 | `message_count` | BIGINT | Messages sent that day |
 | `session_count` | BIGINT | Sessions started that day |
@@ -313,6 +331,9 @@ The extension auto-detects the data source by examining the directory structure:
 - **Claude Desktop:** contains `local-agent-mode-sessions/` directory
 - **Claude:** contains `projects/` directory
 - **Copilot:** contains `session-state/` directory
+- **Codex CLI:** contains date-partitioned `sessions/YYYY/` rollout files
+- **Codex Work / Remote / Chat:** share `~/.codex` with CLI, so select their
+  explicit source label to keep the surfaces separate
 - **Gemini CLI:** contains a `tmp/` directory plus an `installation_id` file
 - **Unknown:** returns empty results (or use `source` parameter to force)
 
@@ -322,6 +343,11 @@ FROM read_conversations(path='~/.claude');   -- detected as Claude
 FROM read_conversations(path='~/Library/Application Support/Claude');  -- detected as Claude Desktop
 FROM read_conversations(path='~/.copilot');  -- detected as Copilot
 FROM read_conversations(path='~/.gemini');   -- detected as Gemini CLI
+FROM read_conversations(path='~/.codex');    -- detected as Codex CLI
+
+-- Codex's local surfaces share ~/.codex; choose one explicitly.
+FROM read_conversations(path='~/.codex', source='codex-work');
+FROM read_conversations(path='~/.codex', source='codex-remote');
 
 -- Override detection
 FROM read_conversations(path='custom/dir', source='gemini');
@@ -404,7 +430,7 @@ See [examples/explorer/README.md](examples/explorer/README.md) for details.
 make test
 ```
 
-437 pinned assertions across 21 test files covering row counts, column validation, cross-source queries, join invariants, edge cases, Grok stats, and parse error handling.
+457 pinned assertions across 24 test files covering row counts, column validation, cross-source queries, join invariants, edge cases, provider-specific parsing, and parse error handling.
 
 ## Building from Source
 
@@ -412,10 +438,7 @@ make test
 # First time: configure build environment
 make configure
 
-# Build debug extension
-make debug
-
-# Run tests
+# Build the current debug extension and run tests
 make test
 ```
 

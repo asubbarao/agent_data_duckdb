@@ -66,8 +66,8 @@ docs:
     | Function | Default path | Detected as |
     |----------|-------------|-------------|
     | `read_conversations()` | `~/.claude` | Claude Code |
-    | `read_plans()` | `~/.claude` | Claude Code |
-    | `read_todos()` | `~/.claude` | Claude Code |
+    | `read_plans()` | `~/.claude` | Claude Code, Copilot, Grok, Codex |
+    | `read_todos()` | `~/.claude` | Claude Code, Copilot, Codex |
     | `read_history()` | `~/.claude` | Claude Code |
     | `read_stats()` | `~/.claude` | Claude Code |
 

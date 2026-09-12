@@ -1,4 +1,4 @@
-//! Self-contained, pure-Rust, read-only SQLite reader for Cursor's `state.vscdb`.
+//! Self-contained, pure-Rust, read-only SQLite reader shared by Cursor and Codex.
 //!
 //! Cursor persists chat data in a SQLite KV store. Rather than depend on a
 //! bundled C SQLite (which would break `windows_amd64_mingw` and add ~1 MB to
@@ -7,41 +7,21 @@
 //! cleanly on every target arch (it is plain Rust), and adds negligible binary
 //! size.
 //!
-//! Only the read paths the Cursor parser actually exercises are implemented:
-//!   * resolve a named table's root page via the `sqlite_master` schema (page 1),
-//!   * scan a table b-tree (interior + leaf pages), and
-//!   * decode the leaf-cell record, returning the `key` and `value` columns as
-//!     raw bytes (the parser treats `value` as UTF-8 JSON).
+//! It resolves a named table's root page via `sqlite_master`, walks table b-trees,
+//! and decodes every cell in each leaf record. Cursor consumes the first two
+//! `cursorDiskKV` columns as raw bytes; Codex consumes typed columns from its
+//! local thread-state and thread-history databases.
 //!
 //! Large payloads (Cursor JSON blobs routinely spill) are reassembled across
 //! overflow-page chains per the SQLite file format spec.
 //!
-//! WAL note: SQLite can journal in one of two modes. In the default *rollback*
-//! mode every committed row lives in the main database file, so a main-file-only
-//! reader like this one sees everything. In *WAL* (write-ahead logging) mode,
-//! recent commits are appended to a separate `state.vscdb-wal` sidecar and only
-//! folded ("checkpointed") into the main file later — a main-file-only reader
-//! would miss any row still sitting in the `-wal`.
-//!
-//! Cursor uses rollback mode in practice: every observed `state.vscdb` has its
-//! file-format version byte set to `1` (legacy/rollback) with no `-wal` sidecar.
-//! That byte latches to `2` permanently once a file has ever been WAL, so `1`
-//! means the file has never used WAL. This reader therefore targets rollback-mode
-//! files and does not read `-wal` frames. The test fixture is generated in DELETE
-//! journal mode (see `test/data_cursor/make_fixture.py`) to match.
-//!
-//! If a future Cursor build switches to WAL, supporting it is self-contained and
-//! needs no refactor of the code below: in `open()`, when a non-empty
-//! `state.vscdb-wal` exists, parse its 32-byte header + 24-byte-header frames,
-//! validate the cumulative salt/checksum to find the valid frame set up to the
-//! last commit, and overwrite the affected pages in `data` (extending it if a
-//! commit grew the DB). The existing offset-based reader then runs unchanged over
-//! the merged image. (A pure file reader cannot take SQLite's WAL read-lock, so
-//! it reads an unlocked snapshot — fine for offline/idle Cursor.)
+//! SQLite databases can retain committed pages in a `-wal` sidecar. `open()`
+//! overlays frames through the last complete commit before scanning, so recent
+//! Codex work is visible without linking a platform-specific SQLite library.
+//! The reader does not acquire SQLite's WAL read-lock; it intentionally takes a
+//! best-effort, read-only snapshot and ignores an incomplete trailing frame.
 //!
 //! Reference: <https://www.sqlite.org/fileformat2.html>
-
-#![cfg(feature = "cursor")]
 
 use std::fs;
 use std::path::Path;
@@ -52,6 +32,28 @@ const HEADER_SIZE: usize = 100;
 pub struct KvRow {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
+}
+
+/// A decoded SQLite table record with positional, typed values.
+pub struct SqliteRow {
+    values: Vec<Value>,
+}
+
+impl SqliteRow {
+    pub fn text(&self, index: usize) -> Option<String> {
+        self.values.get(index).and_then(Value::as_text)
+    }
+
+    pub fn int(&self, index: usize) -> Option<i64> {
+        self.values.get(index).and_then(Value::as_int)
+    }
+
+    pub fn bytes(&self, index: usize) -> Vec<u8> {
+        self.values
+            .get(index)
+            .map(Value::to_bytes)
+            .unwrap_or_default()
+    }
 }
 
 /// An in-memory SQLite database file opened read-only.
@@ -66,7 +68,15 @@ impl VscDb {
     /// Open and slurp a SQLite file. Returns `None` if the file is missing or
     /// not a recognisable SQLite database (caller falls back to "no rows").
     pub fn open(path: &Path) -> Option<Self> {
-        Self::from_bytes(fs::read(path).ok()?)
+        let mut db = Self::from_bytes(fs::read(path).ok()?)?;
+        let wal_path = path.with_file_name(format!(
+            "{}-wal",
+            path.file_name()?.to_string_lossy()
+        ));
+        if let Ok(wal) = fs::read(wal_path) {
+            db.apply_wal(&wal);
+        }
+        Some(db)
     }
 
     /// Validate a SQLite header off an in-memory buffer and derive page geometry.
@@ -101,20 +111,97 @@ impl VscDb {
         (n as usize - 1) * self.page_size
     }
 
-    /// Read all rows of the named table.
-    ///
-    /// Resolves the table's root page from `sqlite_master`, then scans the b-tree.
-    /// Records with fewer than two columns or non-text/blob `value` are decoded
-    /// best-effort; rows that fail to decode are skipped rather than panicking.
-    pub fn read_table(&self, table: &str) -> Vec<KvRow> {
+    /// Read every decoded record in a named table.
+    pub fn read_rows(&self, table: &str) -> Vec<SqliteRow> {
         let root = match self.find_root_page(table) {
             Some(r) => r,
             None => return Vec::new(),
         };
-        let mut out = Vec::new();
+        let mut records = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        self.scan_table_btree(root, &mut out, &mut seen);
-        out
+        self.scan_records(root, &mut records, &mut seen);
+        records
+            .into_iter()
+            .map(|values| SqliteRow { values })
+            .collect()
+    }
+
+    /// Read the first two columns of a named table as raw bytes.
+    ///
+    /// This preserves the original Cursor KV API while the generic reader above
+    /// serves normal SQLite tables used by Codex.
+    pub fn read_table(&self, table: &str) -> Vec<KvRow> {
+        self.read_rows(table)
+            .into_iter()
+            .map(|row| KvRow {
+                key: row.bytes(0),
+                value: row.bytes(1),
+            })
+            .collect()
+    }
+
+    /// Overlay committed SQLite WAL frames onto the main database image.
+    fn apply_wal(&mut self, wal: &[u8]) {
+        const WAL_HEADER: usize = 32;
+        const FRAME_HEADER: usize = 24;
+        if wal.len() < WAL_HEADER {
+            return;
+        }
+
+        let magic = u32::from_be_bytes([wal[0], wal[1], wal[2], wal[3]]);
+        if !matches!(magic, 0x377f0682 | 0x377f0683) {
+            return;
+        }
+        let wal_page_size = u32::from_be_bytes([wal[8], wal[9], wal[10], wal[11]]) as usize;
+        let wal_page_size = if wal_page_size == 0 { 65536 } else { wal_page_size };
+        if wal_page_size != self.page_size {
+            return;
+        }
+        let salt = [wal[16], wal[17], wal[18], wal[19], wal[20], wal[21], wal[22], wal[23]];
+        let frame_size = FRAME_HEADER + self.page_size;
+        let mut frames: Vec<(usize, usize)> = Vec::new();
+        let mut last_commit: Option<(usize, usize)> = None;
+        let mut offset = WAL_HEADER;
+
+        while offset + frame_size <= wal.len() {
+            let page_no = u32::from_be_bytes([
+                wal[offset],
+                wal[offset + 1],
+                wal[offset + 2],
+                wal[offset + 3],
+            ]) as usize;
+            if page_no == 0 || wal[offset + 8..offset + 16] != salt {
+                break;
+            }
+            frames.push((page_no, offset + FRAME_HEADER));
+            let db_size = u32::from_be_bytes([
+                wal[offset + 4],
+                wal[offset + 5],
+                wal[offset + 6],
+                wal[offset + 7],
+            ]) as usize;
+            if db_size != 0 {
+                last_commit = Some((frames.len(), db_size));
+            }
+            offset += frame_size;
+        }
+
+        let Some((committed_frames, committed_pages)) = last_commit else {
+            return;
+        };
+        let required_len = committed_pages.saturating_mul(self.page_size);
+        if required_len == 0 {
+            return;
+        }
+        self.data.resize(required_len, 0);
+        for (page_no, page_offset) in frames.into_iter().take(committed_frames) {
+            let destination = match page_no.checked_sub(1).and_then(|n| n.checked_mul(self.page_size)) {
+                Some(offset) if offset + self.page_size <= self.data.len() => offset,
+                _ => continue,
+            };
+            self.data[destination..destination + self.page_size]
+                .copy_from_slice(&wal[page_offset..page_offset + self.page_size]);
+        }
     }
 
     /// Walk `sqlite_master` (root page 1) for `name == table`, returning rootpage.
@@ -138,23 +225,6 @@ impl VscDb {
             }
         }
         None
-    }
-
-    /// Scan a table b-tree rooted at `page`, decoding each leaf record into a
-    /// `KvRow` (col 0 = key, col 1 = value).
-    fn scan_table_btree(
-        &self,
-        page: u32,
-        out: &mut Vec<KvRow>,
-        seen: &mut std::collections::HashSet<u32>,
-    ) {
-        let mut records = Vec::new();
-        self.scan_records(page, &mut records, seen);
-        for rec in records {
-            let key = rec.first().map(|c| c.to_bytes()).unwrap_or_default();
-            let value = rec.get(1).map(|c| c.to_bytes()).unwrap_or_default();
-            out.push(KvRow { key, value });
-        }
     }
 
     /// Recursively collect every leaf record (Vec<Value> per row) under `page`.

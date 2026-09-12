@@ -1,0 +1,2 @@
+{"type":"user","content":"Run two shells."}
+{"type":"assistant","content":"Running.","model_id":"grok-4-fast","tool_calls":[{"name":"run_terminal_command","arguments":"{\"command\":\"true\"}"},{"name":"run_terminal_command","arguments":"{\"command\":\"false\"}"}]}

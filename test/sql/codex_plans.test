@@ -1,0 +1,27 @@
+# name: test/sql/codex_plans.test
+# description: Codex update_plan snapshots load as current plans
+# group: [agent_data]
+
+require agent_data
+
+query II
+SELECT source, session_id
+FROM read_plans(path='test/data_codex_todos');
+----
+codex	019ced00-1111-7222-8333-444455556666
+
+query I
+SELECT plan_name = 'Codex plan'
+   AND instr(content, 'The plan changed.') > 0
+   AND instr(content, '- [x] Inspect repository') > 0
+   AND instr(content, '- [ ] Implement current-state extraction _(in progress)_') > 0
+   AND instr(content, '- [ ] Verify output') > 0
+FROM read_plans(path='test/data_codex_todos');
+----
+true
+
+# The earlier snapshot is not replayed as a second plan.
+query I
+SELECT COUNT(*) FROM read_plans(path='test/data_codex_todos');
+----
+1

@@ -1,4 +1,5 @@
 mod conversations;
+mod codex_store;
 mod detect;
 mod history;
 mod plans;
@@ -6,7 +7,6 @@ mod stats;
 mod todos;
 mod types;
 mod utils;
-#[cfg(feature = "cursor")]
 mod vscdb;
 mod vtab;
 

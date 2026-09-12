@@ -1,4 +1,5 @@
 use crate::detect::{self, Provider};
+use crate::codex_store::{self, CodexSurface};
 use crate::types::claude::*;
 use crate::types::codex::*;
 use crate::types::copilot::*;
@@ -42,9 +43,16 @@ pub struct ConversationRow {
     cwd: Option<String>,
     version: Option<String>,
     stop_reason: Option<String>,
-    /// Grok-only: per-message effort, else session summary backfill.
+    /// Grok: per-message effort, else session summary backfill.
+    /// Codex: latest `turn_context.effort` carried forward. Other providers NULL.
     reasoning_effort: Option<String>,
     repository: Option<String>,
+    /// Codex session_meta.originator (for example, "Codex CLI" or "Codex Desktop").
+    /// NULL for providers that do not expose this client metadata.
+    client_originator: Option<String>,
+    /// Codex session_meta.source. Kept distinct from normalized `source`.
+    /// NULL for providers that do not expose this client metadata.
+    client_source: Option<String>,
 }
 
 pub struct Conversations;
@@ -433,8 +441,8 @@ impl Conversations {
 // ─── Codex loading ───
 //
 // rollout-*.jsonl is a single ordered stream. `session_meta` (first line) and the
-// latest `turn_context` are carried forward and applied to every emitted row —
-// the same "session metadata backfill" technique used for Copilot above.
+// latest `turn_context` (model + effort) are carried forward and applied to every
+// emitted row — the same "session metadata backfill" technique used for Copilot.
 // `session_meta` / `turn_context` / `token_count` lines are NOT emitted as rows.
 
 impl Conversations {
@@ -455,6 +463,7 @@ impl Conversations {
 
             let mut meta = CodexSessionMeta::default();
             let mut current_model: Option<String> = None;
+            let mut current_effort: Option<String> = None;
             let mut file_line: i64 = 0;
             // event_msg/{user,agent}_message duplicate the response_item/message
             // turns. Buffer them and only emit as a fallback for sessions that
@@ -502,6 +511,9 @@ impl Conversations {
                             if let Some(m) = tc.model {
                                 current_model = Some(m);
                             }
+                            if let Some(effort) = tc.effort {
+                                current_effort = Some(effort);
+                            }
                         }
                         continue;
                     }
@@ -515,6 +527,7 @@ impl Conversations {
                     file_line,
                     &meta,
                     current_model.as_deref(),
+                    current_effort.as_deref(),
                 ) {
                     if parsed.line_type == "event_msg"
                         && matches!(row.message_type.as_str(), "user" | "assistant")
@@ -546,6 +559,7 @@ impl Conversations {
         timestamp: Option<String>,
         meta: &CodexSessionMeta,
         model: Option<&str>,
+        effort: Option<&str>,
     ) -> ConversationRow {
         let git = meta.git.as_ref();
         ConversationRow {
@@ -560,6 +574,9 @@ impl Conversations {
             repository: git.and_then(|g| g.repository_url.clone()),
             version: meta.cli_version.clone(),
             model: model.map(String::from),
+            reasoning_effort: effort.map(String::from),
+            client_originator: meta.originator.clone(),
+            client_source: meta.source.clone(),
             ..Default::default()
         }
     }
@@ -571,6 +588,7 @@ impl Conversations {
         line_number: i64,
         meta: &CodexSessionMeta,
         model: Option<&str>,
+        effort: Option<&str>,
     ) -> Option<ConversationRow> {
         let base = Self::codex_base_row(
             session_uuid,
@@ -579,6 +597,7 @@ impl Conversations {
             parsed.timestamp.clone(),
             meta,
             model,
+            effort,
         );
 
         match parsed.line_type.as_str() {
@@ -658,6 +677,134 @@ impl Conversations {
             }
             _ => None,
         }
+    }
+
+    /// Codex Work, Remote, and Chat use the local SQLite thread projection rather
+    /// than the CLI rollout stream. The projection carries one ordered item per
+    /// user turn, agent turn, plan, and tool activity.
+    fn load_codex_surface_rows(
+        base_path: &std::path::Path,
+        surface: CodexSurface,
+    ) -> Vec<ConversationRow> {
+        let store = codex_store::read_codex_thread_store(base_path, surface);
+        let mut rows = Vec::new();
+
+        for item in store.items {
+            let Some(thread) = store.threads.get(&item.thread_id) else {
+                continue;
+            };
+            let payload: serde_json::Value = match serde_json::from_str(&item.item_json) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    rows.push(ConversationRow {
+                        source: surface.source_label().to_string(),
+                        session_id: thread.id.clone(),
+                        project_path: thread.cwd.clone(),
+                        file_name: "thread_history_1.sqlite".to_string(),
+                        is_agent: thread.thread_source.as_deref() == Some("subagent"),
+                        line_number: item.rollout_ordinal,
+                        message_type: "_parse_error".to_string(),
+                        uuid: Some(item.item_id),
+                        timestamp: utils::unix_ms_to_iso(item.created_at_ms),
+                        message_content: Some(format!("Parse error: {}", error)),
+                        model: thread.model.clone(),
+                        git_branch: thread.git_branch.clone(),
+                        cwd: Some(thread.cwd.clone()),
+                        version: thread.cli_version.clone(),
+                        reasoning_effort: thread.reasoning_effort.clone(),
+                        repository: thread.repository.clone(),
+                        client_originator: Some(surface.source_label().to_string()),
+                        client_source: Some(thread.source.clone()),
+                        ..Default::default()
+                    });
+                    continue;
+                }
+            };
+
+            let (message_type, message_role, tool_name, tool_input) = match item.item_type.as_str() {
+                "userMessage" => ("user", Some("user"), None, None),
+                "agentMessage" => ("assistant", Some("assistant"), None, None),
+                "reasoning" => ("reasoning", Some("assistant"), None, None),
+                "plan" => ("plan", Some("assistant"), None, None),
+                "commandExecution" => (
+                    "tool_result",
+                    Some("tool"),
+                    Some("command".to_string()),
+                    Self::codex_store_field(&payload, "command"),
+                ),
+                "mcpToolCall" => (
+                    "tool_call",
+                    Some("tool"),
+                    Self::codex_store_field(&payload, "tool")
+                        .or_else(|| Self::codex_store_field(&payload, "name")),
+                    Self::codex_store_field(&payload, "arguments")
+                        .or_else(|| Self::codex_store_field(&payload, "input")),
+                ),
+                "webSearch" => (
+                    "tool_call",
+                    Some("tool"),
+                    Some("web_search".to_string()),
+                    Self::codex_store_field(&payload, "query"),
+                ),
+                "fileChange" => (
+                    "tool_call",
+                    Some("tool"),
+                    Some("file_change".to_string()),
+                    Self::codex_store_field(&payload, "path"),
+                ),
+                "collabAgentToolCall" => (
+                    "tool_call",
+                    Some("tool"),
+                    Self::codex_store_field(&payload, "tool"),
+                    Self::codex_store_field(&payload, "prompt"),
+                ),
+                other => (other, None, None, None),
+            };
+
+            rows.push(ConversationRow {
+                source: surface.source_label().to_string(),
+                session_id: thread.id.clone(),
+                project_path: thread.cwd.clone(),
+                file_name: "thread_history_1.sqlite".to_string(),
+                is_agent: thread.thread_source.as_deref() == Some("subagent"),
+                line_number: item.rollout_ordinal,
+                message_type: message_type.to_string(),
+                uuid: Self::codex_store_field(&payload, "id").or(Some(item.item_id)),
+                timestamp: utils::unix_ms_to_iso(item.created_at_ms),
+                message_role: message_role.map(String::from),
+                message_content: Self::codex_store_content(&payload),
+                model: thread.model.clone(),
+                tool_name,
+                tool_use_id: Self::codex_store_field(&payload, "id"),
+                tool_input,
+                slug: if thread.title.is_empty() { None } else { Some(thread.title.clone()) },
+                git_branch: thread.git_branch.clone(),
+                cwd: Some(thread.cwd.clone()),
+                version: thread.cli_version.clone(),
+                reasoning_effort: thread.reasoning_effort.clone(),
+                repository: thread.repository.clone(),
+                client_originator: Some(surface.source_label().to_string()),
+                client_source: Some(thread.source.clone()),
+                ..Default::default()
+            });
+        }
+        rows
+    }
+
+    fn codex_store_field(payload: &serde_json::Value, name: &str) -> Option<String> {
+        payload.get(name).and_then(|value| match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(value) => Some(value.clone()),
+            value => Some(value.to_string()),
+        })
+    }
+
+    fn codex_store_content(payload: &serde_json::Value) -> Option<String> {
+        Self::codex_store_field(payload, "text")
+            .or_else(|| payload.get("content").map(utils::extract_text_content))
+            .or_else(|| Self::codex_store_field(payload, "aggregatedOutput"))
+            .or_else(|| Self::codex_store_field(payload, "output"))
+            .or_else(|| Self::codex_store_field(payload, "summary"))
     }
 }
 
@@ -935,9 +1082,22 @@ impl Conversations {
 // Subagents: meta.json → is_agent + parent_uuid.
 
 impl Conversations {
-    /// Prefer a real message id; otherwise `{session_id}:{line_number}`.
-    fn grok_row_uuid(existing: Option<String>, session_id: &str, line_number: i64) -> String {
-        existing.unwrap_or_else(|| format!("{}:{}", session_id, line_number))
+    /// Prefer a real message id. Fan-out `tool_call` rows need their own
+    /// identity, otherwise every tool emitted from one chat_history line
+    /// aliases the same synthetic UUID and downstream consumers silently
+    /// lose rows. Only `tool_call` rows are disambiguated (not `tool_result`).
+    /// When a call has no `id`, fall back to a 1-based emission ordinal so
+    /// missing ids cannot reintroduce collisions.
+    fn grok_row_uuid(
+        existing: Option<String>,
+        session_id: &str,
+        line_number: i64,
+        tool_disambiguator: Option<&str>,
+    ) -> String {
+        existing.unwrap_or_else(|| match tool_disambiguator {
+            Some(id) => format!("{}:{}:tool:{}", session_id, line_number, id),
+            None => format!("{}:{}", session_id, line_number),
+        })
     }
 
     /// Which updates.jsonl sessionUpdate kinds stamp this chat_history type.
@@ -1045,16 +1205,26 @@ impl Conversations {
 
                 match serde_json::from_str::<GrokMessage>(&line) {
                     Ok(msg) => {
+                        let mut tool_call_ordinal: i64 = 0;
                         for mut row in Self::grok_message_to_rows(
                             msg,
                             base,
                             session_model.as_deref(),
                             session_effort.as_deref(),
                         ) {
+                            let tool_key = if row.message_type == "tool_call" {
+                                tool_call_ordinal += 1;
+                                Some(row.tool_use_id.clone().unwrap_or_else(|| {
+                                    format!("idx{}", tool_call_ordinal)
+                                }))
+                            } else {
+                                None
+                            };
                             row.uuid = Some(Self::grok_row_uuid(
                                 row.uuid.take(),
                                 session_uuid,
                                 file_line,
+                                tool_key.as_deref(),
                             ));
                             rows.push(row);
                         }
@@ -1062,7 +1232,7 @@ impl Conversations {
                     Err(e) => rows.push(ConversationRow {
                         message_type: "_parse_error".to_string(),
                         message_content: Some(format!("Parse error: {}", e)),
-                        uuid: Some(Self::grok_row_uuid(None, session_uuid, file_line)),
+                        uuid: Some(Self::grok_row_uuid(None, session_uuid, file_line, None)),
                         ..base
                     }),
                 }
@@ -1189,6 +1359,7 @@ impl TableFunc for Conversations {
             vtab::varchar("git_branch"),    vtab::varchar("cwd"),
             vtab::varchar("version"),       vtab::varchar("stop_reason"),
             vtab::varchar("reasoning_effort"), vtab::varchar("repository"),
+            vtab::varchar("client_originator"), vtab::varchar("client_source"),
         ]
     }
 
@@ -1200,6 +1371,9 @@ impl TableFunc for Conversations {
             Provider::Copilot => Self::load_copilot_rows(&base_path),
             Provider::Cursor => Self::load_cursor_rows(&base_path),
             Provider::Codex => Self::load_codex_rows(&base_path),
+            Provider::CodexWork => Self::load_codex_surface_rows(&base_path, CodexSurface::Work),
+            Provider::CodexRemote => Self::load_codex_surface_rows(&base_path, CodexSurface::Remote),
+            Provider::CodexChat => Self::load_codex_surface_rows(&base_path, CodexSurface::Chat),
             Provider::Gemini => Self::load_gemini_rows(&base_path),
             Provider::Grok => Self::load_grok_rows(&base_path),
             Provider::Unknown => Vec::new(),
@@ -1236,5 +1410,7 @@ impl TableFunc for Conversations {
         vtab::set_varchar_opt(output, 26, idx, row.stop_reason.as_deref());
         vtab::set_varchar_opt(output, 27, idx, row.reasoning_effort.as_deref());
         vtab::set_varchar_opt(output, 28, idx, row.repository.as_deref());
+        vtab::set_varchar_opt(output, 29, idx, row.client_originator.as_deref());
+        vtab::set_varchar_opt(output, 30, idx, row.client_source.as_deref());
     }
 }

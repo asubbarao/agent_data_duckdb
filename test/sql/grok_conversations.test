@@ -99,12 +99,26 @@ WHERE session_id = 'aaaa1111-0000-0000-0000-000000000001' AND line_number = 1;
 ----
 aaaa1111-0000-0000-0000-000000000001:1
 
-# multi-tool fan-out shares the source line's synthetic uuid
-query I
-SELECT COUNT(DISTINCT uuid) FROM read_conversations(path='test/data_grok')
-WHERE session_id = 'aaaa1111-0000-0000-0000-000000000001' AND line_number = 4;
+# multi-tool fan-out has a stable UUID per emitted tool row. The source line
+# is retained as the prefix, but tool_use_id prevents downstream FTS rows from
+# collapsing onto one document.
+query TT
+SELECT uuid, tool_use_id FROM read_conversations(path='test/data_grok')
+WHERE session_id = 'aaaa1111-0000-0000-0000-000000000001' AND line_number = 4
+ORDER BY tool_use_id;
 ----
-1
+aaaa1111-0000-0000-0000-000000000001:4:tool:call_001	call_001
+aaaa1111-0000-0000-0000-000000000001:4:tool:call_002	call_002
+aaaa1111-0000-0000-0000-000000000001:4	NULL
+
+# tool_result rows keep the base line uuid (only tool_call is disambiguated)
+query TT
+SELECT uuid, tool_use_id FROM read_conversations(path='test/data_grok')
+WHERE message_type = 'tool_result'
+ORDER BY line_number;
+----
+aaaa1111-0000-0000-0000-000000000001:5	call_001
+aaaa1111-0000-0000-0000-000000000001:6	call_002
 
 # slug backfilled from summary.generated_title on every row
 query I

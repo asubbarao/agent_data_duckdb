@@ -139,13 +139,11 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_copilot', source='unknow
 # Column count validation (correct number of columns)
 # ============================================================
 
-# Conversations: 29 columns (includes reasoning_tokens + reasoning_effort)
+# Conversations: 31 columns (includes reasoning_* + Codex client_* metadata)
 query I
-SELECT COUNT(*) FROM (
-    SELECT * FROM read_conversations(path='test/data_claude') LIMIT 0
-) sub;
+SELECT COUNT(*) = 31 FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
 ----
-0
+true
 
 # ============================================================
 # WHERE filters work correctly

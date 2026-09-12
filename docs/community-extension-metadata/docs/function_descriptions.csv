@@ -1,6 +1,6 @@
 function,description,comment,example
-read_conversations,"Read conversation messages and tool calls from AI coding agent sessions","Supports Claude Code and GitHub Copilot CLI with auto-detection","SELECT * FROM read_conversations(path='~/.claude') LIMIT 10;"
-read_plans,"Read plan and strategy markdown files from agent sessions","Claude: plans/*.md, Copilot: session-state/*/plan.md","SELECT plan_name, file_size FROM read_plans();"
-read_todos,"Read todo and checklist items with status tracking","Claude: todos/*.json, Copilot: checkpoint markdown checklists","SELECT content, status FROM read_todos() WHERE status != 'completed';"
-read_history,"Read command and prompt history","Claude: history.jsonl, Copilot: command-history-state.json","SELECT display FROM read_history() ORDER BY line_number DESC LIMIT 10;"
-read_stats,"Read daily activity statistics (message, session, and tool call counts)","Currently Claude only — returns empty for Copilot","SELECT date, message_count FROM read_stats() ORDER BY date DESC;"
+read_conversations,"Read conversation messages and tool calls from AI coding agent sessions","Supports Claude, Claude Desktop, Copilot, Cursor, Codex, Gemini, and Grok (auto-detect by path, or force with `source`)","SELECT * FROM read_conversations(path='~/.claude') LIMIT 10; SELECT * FROM read_conversations(source='grok', path='~/.grok') LIMIT 10;"
+read_plans,"Read current plans from agent sessions","Claude: plans/*.md; Copilot/Grok plan files; Codex CLI and Work latest plan snapshot","SELECT plan_name, file_size FROM read_plans();"
+read_todos,"Read todo and checklist items with status tracking","Claude: todos/*.json; Copilot checkpoint checklists; Codex CLI and Work plan checkboxes","SELECT content, status FROM read_todos() WHERE status != 'completed';"
+read_history,"Read command and prompt history","Claude: history.jsonl; Copilot command history; Codex CLI and Work user prompts","SELECT display FROM read_history() ORDER BY line_number DESC LIMIT 10;"
+read_stats,"Read daily activity statistics (message, session, and tool call counts)","Claude cache, Grok session signals, and Codex CLI and Work local records","SELECT date, message_count FROM read_stats() ORDER BY date DESC;"

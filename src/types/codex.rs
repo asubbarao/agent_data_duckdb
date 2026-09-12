@@ -9,9 +9,10 @@ use serde::Deserialize;
 //   response_item (message | reasoning | function_call | function_call_output | web_search_call)
 //   event_msg     (user_message | agent_message | token_count | task_* )
 //
-// NOTE: the conversation lives ONLY in these rollout files. The *.sqlite files
-// under ~/.codex (codex-dev.db, logs_*, state_*, goals_*, memories_*) are app
-// automation / logging / inbox data and are intentionally NOT read here.
+// NOTE: rollout files remain the canonical Codex CLI transcript. The separate
+// Codex Work/Remote/Chat providers read the thread projection in state_5.sqlite
+// plus thread_history_1.sqlite; unrelated logs, goals, and browser caches stay
+// out of the reader.
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct CodexLine {
@@ -47,6 +48,8 @@ pub struct CodexGit {
 pub struct CodexTurnContext {
     pub model: Option<String>,
     pub cwd: Option<String>,
+    /// Reasoning effort for the turn (for example, "low" / "medium" / "high").
+    pub effort: Option<String>,
 }
 
 /// `payload` of a `response_item` line. `type` discriminates the variant.
@@ -68,6 +71,21 @@ pub struct CodexResponseItem {
     pub output: Option<serde_json::Value>,
 }
 
+/// `arguments` of an `update_plan` function call.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct CodexPlanUpdate {
+    pub explanation: Option<String>,
+    pub plan: Vec<CodexPlanStep>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct CodexPlanStep {
+    pub step: String,
+    pub status: String,
+}
+
 /// `payload` of an `event_msg` line.
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(default)]
@@ -77,4 +95,14 @@ pub struct CodexEventMsg {
     pub message: Option<String>,
     pub phase: Option<String>,
     pub last_agent_message: Option<String>,
+}
+
+/// One user prompt from `~/.codex/history.jsonl`.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct CodexHistoryEntry {
+    pub session_id: Option<String>,
+    /// Codex stores this as Unix seconds, unlike Claude's millisecond field.
+    pub ts: Option<i64>,
+    pub text: Option<String>,
 }

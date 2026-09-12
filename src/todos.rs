@@ -1,4 +1,5 @@
 use crate::detect::{self, Provider};
+use crate::codex_store::{self, CodexSurface, CodexThreadItem};
 use crate::types::claude::TodoItem;
 use crate::utils;
 use crate::vtab::{self, ColDef, TableFunc};
@@ -106,6 +107,100 @@ impl Todos {
         }
         rows
     }
+
+    /// Codex writes complete plan snapshots through `update_plan` function calls.
+    /// Only the final valid snapshot from each rollout represents the current
+    /// todo state, so prior updates are deliberately replaced rather than replayed.
+    fn load_codex_rows(base_path: &std::path::Path) -> Vec<TodoRow> {
+        let files = utils::discover_codex_rollout_files(base_path);
+        let mut rows = Vec::new();
+
+        for (fallback_session_id, file_path) in files {
+            let file_name = file_path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if let Some(plan) = utils::read_codex_latest_plan(&file_path, &fallback_session_id) {
+                for (item_index, item) in plan.steps.into_iter().enumerate() {
+                    rows.push(TodoRow {
+                        source: "codex".to_string(),
+                        session_id: plan.session_id.clone(),
+                        agent_id: None,
+                        file_name: file_name.clone(),
+                        item_index: item_index as i64,
+                        content: item.step,
+                        status: item.status,
+                        active_form: None,
+                    });
+                }
+            }
+        }
+
+        rows
+    }
+
+    fn load_codex_surface_rows(
+        base_path: &std::path::Path,
+        surface: CodexSurface,
+    ) -> Vec<TodoRow> {
+        let store = codex_store::read_codex_thread_store(base_path, surface);
+        let mut latest: std::collections::HashMap<String, CodexThreadItem> =
+            std::collections::HashMap::new();
+        for item in store.items.into_iter().filter(|item| item.item_type == "plan") {
+            let replace = latest
+                .get(&item.thread_id)
+                .map(|previous| {
+                    (item.rollout_ordinal, item.updated_at_ordinal)
+                        > (previous.rollout_ordinal, previous.updated_at_ordinal)
+                })
+                .unwrap_or(true);
+            if replace {
+                latest.insert(item.thread_id.clone(), item);
+            }
+        }
+
+        let mut rows = Vec::new();
+        let mut item_indices: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for item in latest.into_values() {
+            let payload: serde_json::Value = match serde_json::from_str(&item.item_json) {
+                Ok(payload) => payload,
+                Err(_) => continue,
+            };
+            let Some(plan) = payload.get("text").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            for line in plan.lines() {
+                let trimmed = line.trim();
+                let (content, status) = if let Some(content) = trimmed
+                    .strip_prefix("- [x] ")
+                    .or_else(|| trimmed.strip_prefix("- [X] "))
+                {
+                    (content, "completed")
+                } else if let Some(content) = trimmed.strip_prefix("- [ ] ") {
+                    (content, "pending")
+                } else {
+                    continue;
+                };
+                rows.push(TodoRow {
+                    source: surface.source_label().to_string(),
+                    session_id: item.thread_id.clone(),
+                    agent_id: None,
+                    file_name: "thread_history_1.sqlite".to_string(),
+                    item_index: {
+                        let index = item_indices.entry(item.thread_id.clone()).or_insert(0);
+                        let current = *index;
+                        *index += 1;
+                        current
+                    },
+                    content: content.to_string(),
+                    status: status.to_string(),
+                    active_form: None,
+                });
+            }
+        }
+        rows
+    }
 }
 
 impl TableFunc for Todos {
@@ -129,14 +224,16 @@ impl TableFunc for Todos {
         match detect::resolve_provider(&base_path, source) {
             Provider::Claude => Self::load_claude_rows(&base_path),
             Provider::Copilot => Self::load_copilot_rows(&base_path),
+            Provider::Codex => Self::load_codex_rows(&base_path),
+            Provider::CodexWork => Self::load_codex_surface_rows(&base_path, CodexSurface::Work),
+            Provider::CodexRemote => Self::load_codex_surface_rows(&base_path, CodexSurface::Remote),
+            Provider::CodexChat => Self::load_codex_surface_rows(&base_path, CodexSurface::Chat),
             // Claude Desktop has no top-level todos/ directory. Cursor todos live
-            // in composerData.todos (extraction deferred, see PR); Codex todo
-            // extraction (update_plan tool calls) is deferred; Gemini todos live
-            // inline as write_todos tool calls; Grok has no standalone todo
+            // in composerData.todos (extraction deferred, see PR); Gemini todos
+            // live inline as write_todos tool calls; Grok has no standalone todo
             // store. Return empty.
             Provider::ClaudeDesktop
             | Provider::Cursor
-            | Provider::Codex
             | Provider::Gemini
             | Provider::Grok
             | Provider::Unknown => Vec::new(),

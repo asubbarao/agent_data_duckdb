@@ -1,3 +1,7 @@
+use crate::types::codex::{
+    CodexLine, CodexPlanStep, CodexPlanUpdate, CodexResponseItem, CodexSessionMeta,
+};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 /// Resolve a data directory path.
@@ -299,6 +303,59 @@ pub fn stats_file_path(base_path: &Path) -> PathBuf {
     base_path.join("stats-cache.json")
 }
 
+/// Convert a positive Unix millisecond timestamp to an ISO-8601 UTC timestamp.
+/// This keeps the extension dependency-free while normalizing Codex's SQLite
+/// millisecond fields into the same `timestamp` column used by JSONL providers.
+pub fn unix_ms_to_iso(timestamp_ms: i64) -> Option<String> {
+    if timestamp_ms <= 0 {
+        return None;
+    }
+    let seconds = timestamp_ms.div_euclid(1_000);
+    let millis = timestamp_ms.rem_euclid(1_000);
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_unix_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+    ))
+}
+
+/// Return the UTC calendar day for a positive Unix millisecond timestamp.
+pub fn unix_ms_to_date(timestamp_ms: i64) -> Option<String> {
+    unix_ms_to_iso(timestamp_ms).and_then(|timestamp| timestamp.get(..10).map(String::from))
+}
+
+/// Extract a `YYYY-MM-DD` prefix from an ISO-8601 timestamp.
+pub fn iso_date(timestamp: &str) -> Option<String> {
+    let bytes = timestamp.as_bytes();
+    if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    timestamp.get(..10).map(String::from)
+}
+
+/// Howard Hinnant's civil-date conversion for days since the Unix epoch.
+fn civil_from_unix_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524
+        - day_of_era / 146_096)
+        / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month, day)
+}
+
 /// Extract text content from a serde_json::Value that could be a string or array.
 pub fn extract_text_content(value: &serde_json::Value) -> String {
     match value {
@@ -478,6 +535,72 @@ pub fn discover_codex_rollout_files(base_path: &Path) -> Vec<(String, PathBuf)> 
     walk_codex(&sessions_dir, &mut results);
     results.sort_by(|a, b| a.1.cmp(&b.1));
     results
+}
+
+/// The final valid `update_plan` call in a Codex rollout is its current plan.
+/// It is shared by `read_todos` and `read_plans` so both tables expose the same
+/// state instead of replaying every intermediate update.
+pub struct CodexPlanSnapshot {
+    pub session_id: String,
+    pub explanation: Option<String>,
+    pub steps: Vec<CodexPlanStep>,
+}
+
+pub fn read_codex_latest_plan(
+    file_path: &Path,
+    fallback_session_id: &str,
+) -> Option<CodexPlanSnapshot> {
+    let file = std::fs::File::open(file_path).ok()?;
+    let mut session_id = fallback_session_id.to_string();
+    let mut latest_plan: Option<CodexPlanUpdate> = None;
+
+    for line_result in BufReader::new(file).lines() {
+        let line = match line_result {
+            Ok(line) if !line.trim().is_empty() => line,
+            _ => continue,
+        };
+        let codex_line = match serde_json::from_str::<CodexLine>(&line) {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+
+        if codex_line.line_type == "session_meta" {
+            if let Ok(meta) = serde_json::from_value::<CodexSessionMeta>(codex_line.payload) {
+                if let Some(id) = meta.id {
+                    session_id = id;
+                }
+            }
+            continue;
+        }
+        if codex_line.line_type != "response_item" {
+            continue;
+        }
+
+        let response = match serde_json::from_value::<CodexResponseItem>(codex_line.payload) {
+            Ok(response) => response,
+            Err(_) => continue,
+        };
+        if response.item_type.as_deref() != Some("function_call")
+            || response.name.as_deref() != Some("update_plan")
+        {
+            continue;
+        }
+
+        let arguments = match response.arguments {
+            Some(serde_json::Value::String(arguments)) => serde_json::from_str(&arguments),
+            Some(arguments) => Ok(arguments),
+            None => continue,
+        };
+        if let Ok(plan) = arguments.and_then(serde_json::from_value::<CodexPlanUpdate>) {
+            latest_plan = Some(plan);
+        }
+    }
+
+    latest_plan.map(|plan| CodexPlanSnapshot {
+        session_id,
+        explanation: plan.explanation,
+        steps: plan.plan,
+    })
 }
 
 fn walk_codex(dir: &Path, out: &mut Vec<(String, PathBuf)>) {

@@ -1,0 +1,34 @@
+# name: test/sql/grok_tool_uuid.test
+# description: Grok tool_call UUID uniqueness when tool ids are missing
+# group: [agent_data]
+
+require agent_data
+
+# One assistant line fans out two tool_calls with no id fields. Each emitted
+# tool_call must still get a distinct synthetic uuid via ordinal fallback.
+# Rows: user + assistant text + 2 tool_call.
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok_noid');
+----
+4
+
+query TT
+SELECT uuid, tool_use_id FROM read_conversations(path='test/data_grok_noid')
+WHERE message_type = 'tool_call'
+ORDER BY uuid;
+----
+dddd4444-0000-0000-0000-000000000004:2:tool:idx1	NULL
+dddd4444-0000-0000-0000-000000000004:2:tool:idx2	NULL
+
+# Assistant text row keeps the base line uuid (no :tool: suffix).
+query T
+SELECT uuid FROM read_conversations(path='test/data_grok_noid')
+WHERE message_type = 'assistant';
+----
+dddd4444-0000-0000-0000-000000000004:2
+
+# All conversation uuids in the fixture are distinct.
+query I
+SELECT COUNT(*) = COUNT(DISTINCT uuid) FROM read_conversations(path='test/data_grok_noid');
+----
+true

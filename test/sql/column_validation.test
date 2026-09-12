@@ -15,6 +15,44 @@ WHERE typeof(source) != 'VARCHAR';
 ----
 0
 
+# Codex client metadata columns are VARCHAR when populated.
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex')
+WHERE typeof(client_originator) != 'VARCHAR' OR typeof(client_source) != 'VARCHAR';
+----
+0
+
+# Other providers leave Codex-specific client metadata NULL.
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
+WHERE client_originator IS NOT NULL OR client_source IS NOT NULL;
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_copilot')
+WHERE client_originator IS NOT NULL OR client_source IS NOT NULL;
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_cursor')
+WHERE client_originator IS NOT NULL OR client_source IS NOT NULL;
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_gemini')
+WHERE client_originator IS NOT NULL OR client_source IS NOT NULL;
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
+WHERE client_originator IS NOT NULL OR client_source IS NOT NULL;
+----
+0
+
 # line_number is BIGINT
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
@@ -389,4 +427,3 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
 WHERE reasoning_effort IS NOT NULL;
 ----
 0
-

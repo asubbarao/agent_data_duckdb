@@ -1,0 +1,28 @@
+# name: test/sql/codex_todos.test
+# description: Codex update_plan snapshots load as current todos
+# group: [agent_data]
+
+require agent_data
+
+# Codex emits a full plan on every update. Only the final snapshot should be
+# returned, so the earlier "Old plan item" does not remain in current state.
+query III
+SELECT item_index, content, status
+FROM read_todos(path='test/data_codex_todos')
+ORDER BY item_index;
+----
+0	Inspect repository	completed
+1	Implement current-state extraction	in_progress
+2	Verify output	pending
+
+query II
+SELECT DISTINCT source, session_id
+FROM read_todos(path='test/data_codex_todos');
+----
+codex	019ced00-1111-7222-8333-444455556666
+
+query I
+SELECT COUNT(*) FROM read_todos(path='test/data_codex_todos')
+WHERE agent_id IS NOT NULL OR active_form IS NOT NULL;
+----
+0
