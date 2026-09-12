@@ -19,6 +19,8 @@ pub struct ConversationRow {
     project_path: String,
     project_dir: String,
     file_name: String,
+    /// Absolute path of the file this row was read from (as `read_plans.file_path`).
+    file_path: String,
     is_agent: bool,
     line_number: i64,
     message_type: String,
@@ -48,6 +50,19 @@ pub struct ConversationRow {
 }
 
 pub struct Conversations;
+
+impl Conversations {
+    /// Set `file_path` on every row read from `path`, made absolute.
+    fn stamp_file_path(rows: &mut [ConversationRow], path: &std::path::Path) {
+        let abs = std::path::absolute(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+        for row in rows {
+            row.file_path = abs.clone();
+        }
+    }
+}
 
 // ─── Claude loading helpers ───
 
@@ -223,6 +238,7 @@ impl Conversations {
                     }
                 }
             }
+            Self::stamp_file_path(&mut rows[file_rows_start..], file_path);
         }
         rows
     }
@@ -321,6 +337,7 @@ impl Conversations {
             for row in &mut rows[start..] {
                 if row.session_id.is_empty() { row.session_id = meta.session_id.clone(); }
             }
+            Self::stamp_file_path(&mut rows[start..], file_path);
         }
         rows
     }
@@ -453,6 +470,7 @@ impl Conversations {
                 Err(_) => continue,
             };
 
+            let file_rows_start = rows.len();
             let mut meta = CodexSessionMeta::default();
             let mut current_model: Option<String> = None;
             let mut file_line: i64 = 0;
@@ -535,6 +553,7 @@ impl Conversations {
             if !has_response_message {
                 rows.append(&mut event_msg_fallback);
             }
+            Self::stamp_file_path(&mut rows[file_rows_start..], file_path);
         }
         rows
     }
@@ -674,6 +693,7 @@ impl Conversations {
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_default();
+            let file_rows_start = rows.len();
 
             let content = match std::fs::read_to_string(file_path) {
                 Ok(c) => c,
@@ -693,6 +713,7 @@ impl Conversations {
                         message_content: Some(format!("Parse error: {}", e)),
                         ..Default::default()
                     });
+                    Self::stamp_file_path(&mut rows[file_rows_start..], file_path);
                     continue;
                 }
             };
@@ -769,6 +790,7 @@ impl Conversations {
                     });
                 }
             }
+            Self::stamp_file_path(&mut rows[file_rows_start..], file_path);
         }
         rows
     }
@@ -911,6 +933,7 @@ impl Conversations {
                 prev_bubble = Some(bubble_id);
             }
         }
+        Self::stamp_file_path(&mut rows, &db_path);
         rows
     }
 }
@@ -959,6 +982,7 @@ impl Conversations {
         let mut rows = Vec::new();
 
         for (session_uuid, decoded_cwd, encoded_cwd, file_path) in &files {
+            let file_rows_start = rows.len();
             let session_dir = file_path.parent().unwrap_or(file_path);
             let summary = utils::read_grok_summary(session_dir);
             let usage = utils::read_grok_last_turn_usage(session_dir);
@@ -1067,6 +1091,7 @@ impl Conversations {
                     }),
                 }
             }
+            Self::stamp_file_path(&mut rows[file_rows_start..], file_path);
         }
         rows
     }
@@ -1189,6 +1214,7 @@ impl TableFunc for Conversations {
             vtab::varchar("git_branch"),    vtab::varchar("cwd"),
             vtab::varchar("version"),       vtab::varchar("stop_reason"),
             vtab::varchar("reasoning_effort"), vtab::varchar("repository"),
+            vtab::varchar("file_path"),
         ]
     }
 
@@ -1236,5 +1262,6 @@ impl TableFunc for Conversations {
         vtab::set_varchar_opt(output, 26, idx, row.stop_reason.as_deref());
         vtab::set_varchar_opt(output, 27, idx, row.reasoning_effort.as_deref());
         vtab::set_varchar_opt(output, 28, idx, row.repository.as_deref());
+        vtab::set_varchar(output, 29, idx, &row.file_path);
     }
 }

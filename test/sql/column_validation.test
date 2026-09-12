@@ -347,6 +347,13 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_grok') WHERE uuid IS NUL
 ----
 0
 
+# Grok basenames collide (every session is chat_history.jsonl); file_path must not
+query I
+SELECT COUNT(DISTINCT file_path) = COUNT(DISTINCT session_id)
+FROM read_conversations(path='test/data_grok');
+----
+true
+
 # Tokens only on the session that has updates.jsonl turn_completed usage
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
