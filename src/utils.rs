@@ -145,7 +145,89 @@ pub fn discover_claude_desktop_files(base_path: &Path) -> Vec<(String, bool, Pat
     for projects_dir in projects_dirs {
         results.extend(discover_project_jsonl_files(&projects_dir));
     }
+    results.extend(discover_desktop_files_in_claude_home(base_path));
+
+    // The two walks are meant to be disjoint — one covers sessions that keep
+    // their transcript beside the workspace, the other sessions that write to
+    // the Claude Code location. Nothing enforces that, though, and a symlinked
+    // `.claude` under the Desktop directory would make them overlap. Duplicate
+    // files would silently double every count, so drop repeats by path rather
+    // than rely on the assumption holding.
+    let mut seen = std::collections::HashSet::new();
+    results.retain(|(_, _, path)| seen.insert(path.clone()));
     results
+}
+
+/// Desktop sessions that run in a scratch workspace do not keep their
+/// transcript beside the workspace. The session's cwd is a directory under the
+/// Desktop support folder, but the JSONL itself is written to the ordinary
+/// Claude Code location, `~/.claude/projects/<encoded-cwd>/`. Looking only
+/// under `local-agent-mode-sessions/` therefore finds nothing at all for these
+/// chats, which is the common case on a machine that uses Cowork.
+///
+/// A transcript counts as Desktop when its encoded project directory names a
+/// cwd inside `base_path`. The encoding replaces every `/` with `-`, and path
+/// separators are not the only thing flattened — a space becomes `-` too, so
+/// `Application Support` encodes as `Application-Support`. Matching the
+/// similarly-encoded `base_path` as a prefix is exact enough to avoid pulling
+/// in unrelated projects, and avoids round-tripping through the lossy
+/// `decode_project_path`.
+fn discover_desktop_files_in_claude_home(base_path: &Path) -> Vec<(String, bool, PathBuf)> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+    desktop_files_under(base_path, &home.join(".claude").join("projects"))
+}
+
+/// The testable half of `discover_desktop_files_in_claude_home`: everything
+/// except finding the home directory.
+fn desktop_files_under(base_path: &Path, projects_dir: &Path) -> Vec<(String, bool, PathBuf)> {
+    // A relative or empty base path cannot name a cwd, and its encoding would
+    // be a prefix that matches far too much: `path=''` encodes to `""`, which
+    // every project directory starts with, so the whole of ~/.claude would come
+    // back labelled as Desktop.
+    if !base_path.is_absolute() {
+        return Vec::new();
+    }
+    let prefix = encode_project_path(base_path);
+    if prefix.len() <= 1 || !projects_dir.is_dir() {
+        return Vec::new();
+    }
+
+    discover_project_jsonl_files(projects_dir)
+        .into_iter()
+        .filter(|(encoded, _, _)| encoded_is_under(encoded, &prefix))
+        .collect()
+}
+
+/// Does `encoded` name the base directory itself, or something inside it?
+///
+/// A bare `starts_with` is wrong, because the encoding has no escape for the
+/// separator: the encoding of `/a/b` is a prefix of the encoding of `/a/bc`,
+/// so matching `/a/b` would sweep in an unrelated sibling. Requiring the next
+/// character to be the separator restores the boundary. Sibling names that
+/// differ only by a suffix are ordinary — this machine has both `design` and
+/// `design-system` — so this is a real collision, not a hypothetical one.
+fn encoded_is_under(encoded: &str, prefix: &str) -> bool {
+    encoded == prefix
+        || (encoded.starts_with(prefix) && encoded[prefix.len()..].starts_with('-'))
+}
+
+/// Encode an absolute path the way Claude names a `projects/` subdirectory.
+///
+/// Separators, spaces *and dots* all collapse to `-`, which is why the encoding
+/// is lossy and `decode_project_path` cannot round-trip. The dot matters: a
+/// path through a hidden directory produces a doubled dash, as in the real
+/// `-Users-me-inframe--claude-worktrees-design-system` for
+/// `/Users/me/inframe/.claude/worktrees/design-system`. Leaving dots alone here
+/// would mean a base path containing one never matches anything, silently
+/// finding no transcripts at all.
+pub fn encode_project_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == ' ' || c == '.' { '-' } else { c })
+        .collect()
 }
 
 /// Recursively collect every `.claude/projects` directory beneath `dir`.
@@ -869,4 +951,67 @@ pub fn url_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+
+#[cfg(test)]
+mod desktop_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn encoding_collapses_separators_spaces_and_dots() {
+        assert_eq!(
+            encode_project_path(Path::new("/Users/me/Library/Application Support/Claude")),
+            "-Users-me-Library-Application-Support-Claude"
+        );
+        // A hidden directory yields a doubled dash, because the '/' before it
+        // and the '.' that starts it both become '-'. This is the real shape
+        // seen in ~/.claude/projects.
+        assert_eq!(
+            encode_project_path(Path::new("/Users/me/inframe/.claude/worktrees/design-system")),
+            "-Users-me-inframe--claude-worktrees-design-system"
+        );
+    }
+
+    #[test]
+    fn prefix_match_respects_the_separator_boundary() {
+        // The sibling case that a bare starts_with gets wrong. Both of these
+        // directory names exist in spirit on this machine: `design` alongside
+        // `design-system`.
+        let base = encode_project_path(Path::new("/a/design"));
+        assert!(encoded_is_under("-a-design", &base));
+        assert!(encoded_is_under("-a-design-sub", &base));
+        assert!(!encoded_is_under("-a-designsystem", &base));
+        assert!(!encoded_is_under("-a-design2", &base));
+        assert!(!encoded_is_under("-b-design", &base));
+    }
+
+    #[test]
+    fn scan_finds_only_transcripts_whose_cwd_is_inside_the_base() {
+        let tmp = std::env::temp_dir().join(format!("agent_data_scan_{}", std::process::id()));
+        let projects = tmp.join("projects");
+        let base = Path::new("/Users/me/Library/Application Support/Claude");
+
+        // One session whose cwd is inside the Desktop directory, one sibling
+        // that merely shares a prefix, and one unrelated project.
+        let inside = projects.join("-Users-me-Library-Application-Support-Claude-scratch-workspaces-w1");
+        let sibling = projects.join("-Users-me-Library-Application-Support-Claudex-other");
+        let unrelated = projects.join("-Users-me-Desktop-quackpad");
+        for d in [&inside, &sibling, &unrelated] {
+            std::fs::create_dir_all(d).expect("fixture dir");
+            std::fs::write(d.join("session.jsonl"), "{}\n").expect("fixture file");
+        }
+
+        let found = desktop_files_under(base, &projects);
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert!(found[0].2.starts_with(&inside));
+
+        // A relative base path must scan nothing at all, or `path=''` would
+        // encode to "" and match every directory here.
+        assert!(desktop_files_under(Path::new("test/data_claude_desktop"), &projects).is_empty());
+        assert!(desktop_files_under(Path::new(""), &projects).is_empty());
+        assert!(desktop_files_under(Path::new("/"), &projects).is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }
