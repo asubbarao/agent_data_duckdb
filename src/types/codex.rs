@@ -66,6 +66,13 @@ pub struct CodexResponseItem {
     pub call_id: Option<String>,
     // function_call_output
     pub output: Option<serde_json::Value>,
+    /// `custom_tool_call` puts its arguments here rather than in `arguments`,
+    /// usually as a single JSON string holding the script or command.
+    pub input: Option<serde_json::Value>,
+    /// `agent_message` names the sub-agent that sent it, e.g. `/root/research`.
+    pub author: Option<String>,
+    /// The sub-agent an `agent_message` is addressed to.
+    pub recipient: Option<String>,
 }
 
 /// `payload` of an `event_msg` line.

@@ -1,0 +1,113 @@
+# name: test/sql/source_parsing.test
+# description: the `source` parameter is normalised, authoritative, and validated
+# group: [agent_data]
+
+require agent_data
+
+# ============================================================
+# Separator normalisation
+# ============================================================
+# Every function this extension exposes is named with underscores, so
+# `claude_desktop` is the spelling callers actually reach for. It used to parse
+# as Unknown and fall through to auto-detection.
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude_desktop');
+----
+8
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude desktop');
+----
+8
+
+# Case and surrounding whitespace are not significant
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='  CLAUDE-DESKTOP  ');
+----
+8
+
+# Aliases
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='cowork');
+----
+8
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude', source='claude_code');
+----
+180
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude', source='claude');
+----
+180
+
+# ============================================================
+# An explicit source is authoritative
+# ============================================================
+# Asking for Claude Code against a Desktop directory returns nothing, rather
+# than quietly auto-detecting Desktop and answering a question nobody asked.
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude');
+----
+0
+
+# ============================================================
+# An unknown source is an error, not an empty result
+# ============================================================
+# Silently returning zero rows leaves the caller unable to tell "no data" from
+# "you spelled it wrong", and silently auto-detecting is worse still: it
+# returns some other agent's transcripts and looks like a working query.
+
+statement error
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='nonsense');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_conversations(source='claude-desktopp');
+----
+unknown source
+
+# The error names the valid sources
+statement error
+SELECT COUNT(*) FROM read_conversations(source='');
+----
+claude-desktop
+
+# Validation applies to every table function, not just conversations
+statement error
+SELECT COUNT(*) FROM read_plans(source='nonsense');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_todos(source='nonsense');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_history(source='nonsense');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_stats(source='nonsense');
+----
+unknown source
+
+# ============================================================
+# Omitting source still auto-detects
+# ============================================================
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop');
+----
+8
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude');
+----
+180

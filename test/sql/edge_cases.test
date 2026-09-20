@@ -122,18 +122,22 @@ SELECT COUNT(*) FROM read_stats(path='test/data_copilot');
 0
 
 # ============================================================
-# Unknown source string falls back to auto-detection
+# Unknown source string is an error, not a silent fallback
 # ============================================================
+# This used to fall back to auto-detection and return whatever rows the
+# directory happened to contain, which made a misspelled source
+# indistinguishable from a correct one: you asked for one agent's history, got
+# another's, and nothing said so. See test/sql/source_parsing.test.
 
-query I
+statement error
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude', source='unknown_garbage');
 ----
-180
+unknown source
 
-query I
+statement error
 SELECT COUNT(*) FROM read_conversations(path='test/data_copilot', source='unknown_garbage');
 ----
-53
+unknown source
 
 # ============================================================
 # Column count validation (correct number of columns)

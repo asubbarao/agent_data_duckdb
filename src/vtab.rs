@@ -131,6 +131,9 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
 
         let path = resolve_path(bind);
         let source = resolve_source(bind);
+        // Fail here rather than at execution: a misspelled source used to fall
+        // through to auto-detection and return another agent's transcripts.
+        crate::detect::validate_source(source.as_deref())?;
         Ok(GenericBindData { path, source, rows: Mutex::new(None) })
     }
 

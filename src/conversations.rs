@@ -731,6 +731,41 @@ impl Conversations {
                         message_content: item.output.as_ref().map(utils::extract_text_content),
                         ..base
                     }),
+                    // Codex's newer tool protocol. Same shape as function_call
+                    // under a different name, but the arguments arrive in
+                    // `input` rather than `arguments`. These are the single
+                    // most common response_item types after `message`, so
+                    // letting them fall through to the catch-all blanked the
+                    // tool name, arguments and output on thousands of rows.
+                    Some("custom_tool_call") => Some(ConversationRow {
+                        message_type: "custom_tool_call".to_string(),
+                        message_role: Some("tool".to_string()),
+                        tool_name: item.name.clone(),
+                        tool_use_id: item.call_id.clone(),
+                        tool_input: item.input.as_ref().map(utils::json_text_or_literal),
+                        ..base
+                    }),
+                    Some("custom_tool_call_output") => Some(ConversationRow {
+                        message_type: "custom_tool_call_output".to_string(),
+                        message_role: Some("tool".to_string()),
+                        tool_use_id: item.call_id.clone(),
+                        message_content: item.output.as_ref().map(utils::extract_text_content),
+                        ..base
+                    }),
+                    // A message from one sub-agent to another. Distinct from
+                    // the `event_msg` agent_message the loader already handles:
+                    // this one is a real turn with text, and dropping it lost
+                    // the whole inter-agent conversation.
+                    Some("agent_message") => Some(ConversationRow {
+                        message_type: "agent_message".to_string(),
+                        message_role: Some("assistant".to_string()),
+                        // The sender is not a tool, and the schema has no
+                        // column for it, so it stays out of tool_name. It is
+                        // not lost: these messages carry their own
+                        // "Sender: ..." line inside the text.
+                        message_content: item.content.as_ref().map(utils::extract_text_content),
+                        ..base
+                    }),
                     Some(other) => Some(ConversationRow {
                         message_type: other.to_string(),
                         ..base
