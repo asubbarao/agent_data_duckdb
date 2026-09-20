@@ -3,7 +3,6 @@ use duckdb::{
     vtab::{BindInfo, InitInfo, TableFunctionInfo, VTab},
     Result,
 };
-use std::ffi::CString;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -11,6 +10,7 @@ use std::sync::Mutex;
 
 pub enum ColType {
     Varchar,
+    Blob,
     Bigint,
     Boolean,
 }
@@ -28,6 +28,14 @@ pub fn bigint(name: &'static str) -> ColDef {
     ColDef { name, typ: ColType::Bigint }
 }
 
+pub fn blob(name: &'static str) -> ColDef {
+    ColDef { name, typ: ColType::Blob }
+}
+
+pub fn set_blob(output: &mut DataChunkHandle, col: usize, row: usize, val: &[u8]) {
+    output.flat_vector(col).insert(row, val);
+}
+
 pub fn boolean(name: &'static str) -> ColDef {
     ColDef { name, typ: ColType::Boolean }
 }
@@ -36,13 +44,13 @@ pub fn boolean(name: &'static str) -> ColDef {
 
 pub fn set_varchar(output: &mut DataChunkHandle, col: usize, row: usize, val: &str) {
     let vec = output.flat_vector(col);
-    vec.insert(row, CString::new(val).unwrap_or_default());
+    vec.insert(row, val.as_bytes());
 }
 
 pub fn set_varchar_opt(output: &mut DataChunkHandle, col: usize, row: usize, val: Option<&str>) {
     let mut vec = output.flat_vector(col);
     match val {
-        Some(v) => vec.insert(row, CString::new(v).unwrap_or_default()),
+        Some(v) => vec.insert(row, v.as_bytes()),
         None => vec.set_null(row),
     }
 }
@@ -82,6 +90,17 @@ pub trait TableFunc: Sized + 'static {
     fn columns() -> Vec<ColDef>;
     fn load_rows(path: Option<&str>, source: Option<&str>) -> Vec<Self::Row>;
     fn write_row(output: &mut DataChunkHandle, idx: usize, row: &Self::Row);
+
+    /// Fallible loader used by the executor. The default keeps the permissive
+    /// "return whatever parsed" behavior every existing table function relies
+    /// on; implementors that must surface a hard error (unsupported provider,
+    /// unreadable file) override this instead of `load_rows`.
+    fn try_load_rows(
+        path: Option<&str>,
+        source: Option<&str>,
+    ) -> Result<Vec<Self::Row>, Box<dyn std::error::Error>> {
+        Ok(Self::load_rows(path, source))
+    }
 }
 
 #[repr(C)]
@@ -123,6 +142,7 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
         for col in T::columns() {
             let logical_type = match col.typ {
                 ColType::Varchar => LogicalTypeHandle::from(LogicalTypeId::Varchar),
+                ColType::Blob => LogicalTypeHandle::from(LogicalTypeId::Blob),
                 ColType::Bigint => LogicalTypeHandle::from(LogicalTypeId::Bigint),
                 ColType::Boolean => LogicalTypeHandle::from(LogicalTypeId::Boolean),
             };
@@ -148,10 +168,10 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
 
         // Lazy load: defer I/O from bind (planning) to first func() call (execution)
         if guard.is_none() {
-            *guard = Some(T::load_rows(
+            *guard = Some(T::try_load_rows(
                 bind_data.path.as_deref(),
                 bind_data.source.as_deref(),
-            ));
+            )?);
         }
         let rows = guard.as_ref().unwrap();
 

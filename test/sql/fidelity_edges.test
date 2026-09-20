@@ -1,0 +1,75 @@
+# Direct content-block arrays, unknown events, and NUL-safe DuckDB vectors.
+require agent_data
+
+query I
+SELECT tool_input FROM read_conversations(path='test/data_codex_fidelity_edges', source='codex')
+WHERE tool_use_id = 'array-call' AND message_type = 'custom_tool_call';
+----
+[1,{"nested":true}]
+
+query I
+SELECT replace(message_content, chr(10), '|')
+FROM read_conversations(path='test/data_codex_fidelity_edges', source='codex')
+WHERE tool_use_id = 'array-call' AND message_type = 'custom_tool_call_output';
+----
+first|second
+
+query I
+SELECT tool_input = 'a' || chr(0) || 'b'
+FROM read_conversations(path='test/data_codex_fidelity_edges', source='codex')
+WHERE tool_use_id = 'nul-call' AND message_type = 'custom_tool_call';
+----
+true
+
+query I
+SELECT message_content = 'left' || chr(0) || 'right'
+FROM read_conversations(path='test/data_codex_fidelity_edges', source='codex')
+WHERE tool_use_id = 'nul-call' AND message_type = 'custom_tool_call_output';
+----
+true
+
+query I
+SELECT message_content FROM read_conversations(path='test/data_codex_fidelity_edges', source='codex')
+WHERE message_type = 'agent_message';
+----
+reviewed
+
+query I
+SELECT message_content IS NULL
+FROM read_conversations(path='test/data_codex_fidelity_edges', source='codex')
+WHERE message_type = 'future_operation';
+----
+true
+
+query I
+SELECT count(*) FROM read_events(path='test/data_codex_fidelity_edges', source='codex');
+----
+10
+
+query I
+SELECT raw::JSON -> 'payload' ->> 'sender'
+FROM read_events(path='test/data_codex_fidelity_edges', source='codex')
+WHERE event_type = 'inter_agent_communication_metadata';
+----
+/root/reviewer
+
+query I
+SELECT event_type = 'a' || chr(0) || 'b'
+FROM read_events(path='test/data_codex_fidelity_edges', source='codex')
+WHERE line_number = 10;
+----
+true
+
+query I
+SELECT json_array_length(raw::JSON -> 'payload' -> 'content')
+FROM read_events(path='test/data_codex_fidelity_edges', source='codex')
+WHERE line_number = 5;
+----
+2
+
+query I
+SELECT raw::JSON -> 'payload' ->> 'turn_id'
+FROM read_events(path='test/data_codex_fidelity_edges', source='codex')
+WHERE event_type = 'turn_context';
+----
+turn-1

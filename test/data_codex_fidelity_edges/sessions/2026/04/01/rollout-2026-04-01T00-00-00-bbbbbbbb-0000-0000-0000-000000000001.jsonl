@@ -1,0 +1,10 @@
+{"type":"session_meta","payload":{"id":"bbbbbbbb-0000-0000-0000-000000000001","cwd":"/synthetic/project"}}
+{"type":"turn_context","payload":{"model":"synthetic-model","turn_id":"turn-1","effort":"high"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"array-call","input":[1,{"nested":true}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"array-call","output":[{"type":"input_text","text":"first"},{"type":"output_text","text":"second"},{"type":"image","image_url":"synthetic-image"}]}}
+{"type":"response_item","payload":{"type":"agent_message","author":"/root/reviewer","recipient":"/root","content":[{"type":"text","text":"reviewed"},{"type":"input_image","image_url":"synthetic-image"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"nul-call","input":"a\u0000b"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"nul-call","output":"left\u0000right"}}
+{"type":"response_item","payload":{"type":"future_operation","arbitrary":{"keep":[1,2,3]}}}
+{"type":"inter_agent_communication_metadata","payload":{"sender":"/root/reviewer","recipient":"/root","turn_id":"turn-1"}}
+{"type":"a\u0000b","payload":{"future":true}}

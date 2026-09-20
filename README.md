@@ -1,6 +1,6 @@
 # agent_data — DuckDB Extension for AI Agent Session Data
 
-A [DuckDB extension](https://duckdb.org/community_extensions/list_of_extensions) written in Rust for querying, analysing and inspecting AI coding agents history. Read conversations, plans, todos, history, and usage stats directly from your local agent data directories.
+A [DuckDB extension](https://duckdb.org/community_extensions/list_of_extensions) written in Rust for querying, analysing and inspecting AI coding agents history. Read conversations, plans, todos, history, and usage stats directly from your local agent data directories — or drop to `read_events()` for the raw, lossless JSONL lines behind them.
 
 **Supported agents:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`~/.claude`), Claude Desktop ("Cowork", `~/Library/Application Support/Claude`), [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (`~/.copilot`), [Cursor](https://cursor.com) (`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`, `source='cursor'`), [OpenAI Codex CLI](https://openai.com/codex) (`~/.codex`, `source='codex'`), [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`~/.gemini`) and [xAI Grok CLI](https://x.ai) (`~/.grok`, `source='grok'`).
 
@@ -104,6 +104,7 @@ When called **without arguments**, each function reads from its provider's defau
 | Function | Default path | Detected as |
 |----------|-------------|-------------|
 | `read_conversations()` | `~/.claude` | Claude Code |
+| `read_events()` | `~/.claude` | Claude Code |
 | `read_plans()` | `~/.claude` | Claude Code |
 | `read_todos()` | `~/.claude` | Claude Code |
 | `read_history()` | `~/.claude` | Claude Code |
@@ -124,6 +125,11 @@ All functions accept two optional parameters:
 - **`source`** — explicit provider override: `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`. Use when auto-detection fails or for non-standard directory layouts.
 
 Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`) as the first column.
+
+> **`read_events()` is the exception to the "empty result" convention.** It is the
+> raw, lossless relation (Claude and Codex only) and it *errors* on an unusable
+> path or an unsupported provider instead of returning zero rows — see
+> [`read_events`](#read_eventspath-source) below.
 
 > **Cursor** support is gated behind the default-on `cursor` cargo feature. It reads `state.vscdb` with a self-contained, pure-Rust, read-only SQLite reader (`src/vscdb.rs`) — no external dependency and no bundled C SQLite, so every target arch (including `windows_amd64_mingw`) builds with negligible size overhead. Build with `--no-default-features` to drop it. Only `read_conversations()` is implemented for Cursor; the other tables return no rows for `source='cursor'`.
 
@@ -238,6 +244,84 @@ Reads conversation/event data.
 > `updates.jsonl`. The parser walks chat lines and assigns the next matching
 > wire event's ISO time (same `timestamp` column as Claude). No `updates.jsonl`
 > → summary session stamp only.
+
+### `read_events([path (opt)], [source (opt)])`
+
+The **lossless raw JSONL relation**: one row per *physical line* of every
+transcript file, exactly as it sits on disk. Where `read_conversations()`
+normalizes seven providers into one shared schema (and therefore drops whatever
+it has no column for), `read_events()` drops nothing — unknown event types,
+malformed JSON, blank lines and a half-written final line all come back as rows,
+addressed by `file_path` + `line_number` + `byte_offset`.
+
+- **Claude** (`source='claude'`): `projects/<project>/<session>.jsonl`, including nested sub-agent transcripts at `projects/<project>/<session>/subagents/agent-*.jsonl` (same discovery walk as `read_conversations()`)
+- **Codex** (`source='codex'`): `sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`
+
+Other providers are **not** supported by `read_events()` and raise an error
+(use `read_conversations()` for those).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `source` | VARCHAR | `'claude'` or `'codex'` |
+| `session_id` | VARCHAR | File-derived session id (Claude: file stem or parent session directory for subagents; Codex: rollout filename UUID). Event-level ids remain in `raw`; use file/line provenance when they differ. |
+| `file_path` | VARCHAR | Absolute path of the transcript file the line came from |
+| `file_name` | VARCHAR | File name only |
+| `line_number` | BIGINT | 1-based **physical** line number in that file (counts blank and malformed lines) |
+| `byte_offset` | BIGINT | Byte offset of the line's first byte from the start of the file |
+| `byte_length` | BIGINT | Length of the line in **bytes**, excluding its terminator |
+| `line_ending` | VARCHAR | `'LF'`, `'CRLF'`, or NULL when the line has no terminator (final, possibly partial, line) |
+| `raw` | VARCHAR | The line verbatim, terminator excluded — nothing parsed, reordered or re-serialized |
+| `raw_is_exact` | BOOLEAN | `false` if invalid UTF-8 needed U+FFFD in the text representation; `raw_bytes` always retains the original bytes |
+| `is_valid_json` | BOOLEAN | Whether the line parses as JSON |
+| `parse_error` | VARCHAR | The JSON parser's own message when it does not, else NULL |
+| `event_type` | VARCHAR | Top-level `"type"` **verbatim** — no mapping table, so future/unknown types pass through (NULL if absent or non-string) |
+| `timestamp` | VARCHAR | Top-level `"timestamp"` verbatim (NULL if absent or non-string) |
+| `raw_bytes` | BLOB | Exact line bytes, excluding the separately recorded terminator; authoritative even for invalid UTF-8 or embedded NUL |
+
+`event_type` and `timestamp` are conveniences, not a schema: everything else
+stays in `raw`, so nested payloads are queried from there (e.g. with the `json`
+extension).
+
+**Newline handling.** `\n` (reported as `LF`) and `\r\n` (`CRLF`) terminate a
+line; the terminator is excluded from `raw` and from `byte_length` and recorded
+in `line_ending`. A bare `\r` is **not** a terminator and stays inside `raw`. An
+empty line is a row with `raw = ''` and `byte_length = 0`. A file whose last
+line has no terminator — an agent still writing, or a truncated log — yields a
+final row with `line_ending IS NULL`, kept whether or not it parses. Because
+nothing is normalized in `raw_bytes`, it and `line_ending` reconstruct the original bytes.
+For UTF-8 logs (`raw_is_exact` is true on every row), the text form is:
+
+```sql
+SELECT string_agg(
+           raw || CASE line_ending WHEN 'CRLF' THEN chr(13) || chr(10)
+                                   WHEN 'LF'   THEN chr(10)
+                                   ELSE '' END,
+           '' ORDER BY line_number)
+FROM read_events(path='~/.claude')
+WHERE file_path = '...';   -- byte-identical to the file
+```
+
+**Errors.** A raw reader that silently returns nothing is indistinguishable from
+a lossless read of an empty directory, so `read_events()` fails loudly:
+
+| Condition | Behavior |
+|-----------|----------|
+| `path` does not exist / is not a directory | error (`read_events: path '…' does not exist`) |
+| provider is not Claude or Codex (explicit `source` or auto-detected) | error (`read_events: unsupported provider …`) |
+| a transcript or discovery directory cannot be read | error naming the path and the OS error |
+| supported provider, no transcripts found | **0 rows** (an empty tree is a legitimate answer) |
+
+```sql
+-- Which raw lines does the normalized view not account for?
+SELECT file_name, line_number, event_type, parse_error, raw
+FROM read_events(path='~/.codex', source='codex')
+WHERE NOT is_valid_json OR event_type NOT IN ('session_meta', 'turn_context', 'response_item', 'event_msg');
+
+-- Re-read one exact line from disk by its address
+SELECT file_path, byte_offset, byte_length, raw
+FROM read_events(path='~/.claude')
+WHERE session_id = '…' AND line_number = 42;
+```
 
 ### `read_plans([path], [source])`
 
@@ -360,6 +444,10 @@ When a JSONL line or JSON file cannot be parsed, the extension emits a row with:
 - `display = 'Parse error: ...'` (history)
 
 Filter them with `WHERE message_type != '_parse_error'`.
+
+`read_events()` does not summarize parse failures this way: the offending line
+is returned verbatim in `raw` with `is_valid_json = false` and the parser's own
+message in `parse_error`, so the bytes that failed are still inspectable.
 
 ## Examples
 

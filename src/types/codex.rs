@@ -66,6 +66,9 @@ pub struct CodexResponseItem {
     pub call_id: Option<String>,
     // function_call_output
     pub output: Option<serde_json::Value>,
+    /// `custom_tool_call` puts its arguments here rather than in `arguments`,
+    /// as either a raw string (e.g. an apply_patch body) or a JSON object.
+    pub input: Option<serde_json::Value>,
 }
 
 /// `payload` of an `event_msg` line.

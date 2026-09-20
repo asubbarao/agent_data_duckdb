@@ -1,0 +1,373 @@
+# name: test/sql/raw_events.test
+# description: read_events() — lossless raw JSONL relation (Claude + Codex)
+# group: [agent_data]
+#
+# Fixtures (test/data_raw_events/) are byte-exact on purpose. Each transcript
+# holds, in order: a normal LF line, an unknown event type with nested content
+# and multi-byte text, a malformed line, a blank line, a CRLF-terminated line,
+# and a final line with no terminator. Claude's final line is valid JSON,
+# Codex's is truncated mid-record — between them every combination of
+# (terminated / unterminated) x (valid / invalid) is covered.
+
+require agent_data
+
+statement error
+SELECT * FROM read_events(path='test/data_claude', source='claudee');
+----
+read_events: unsupported provider
+
+query I
+SELECT bool_and(encode(raw) = raw_bytes AND octet_length(raw_bytes) = byte_length)
+FROM read_events(path='test/data_raw_events/claude');
+----
+true
+
+query I
+SELECT bool_and(starts_with(file_path, '/'))
+FROM read_events(path='test/data_raw_events/codex');
+----
+true
+
+# ============================================================
+# Every physical line comes back — nothing filtered, nothing merged
+# ============================================================
+
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/claude');
+----
+6
+
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/codex');
+----
+6
+
+# Explicit source matches auto-detection
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/claude', source='claude');
+----
+6
+
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/codex', source='codex');
+----
+6
+
+query I
+SELECT DISTINCT source FROM read_events(path='test/data_raw_events/claude');
+----
+claude
+
+query I
+SELECT DISTINCT source FROM read_events(path='test/data_raw_events/codex');
+----
+codex
+
+# Session id is the same join key read_conversations() uses for the file
+query I
+SELECT DISTINCT session_id FROM read_events(path='test/data_raw_events/claude');
+----
+aaaaaaaa-0000-0000-0000-000000000001
+
+query I
+SELECT DISTINCT session_id FROM read_events(path='test/data_raw_events/codex');
+----
+aaaaaaaa-0000-0000-0000-000000000002
+
+query I
+SELECT DISTINCT file_name FROM read_events(path='test/data_raw_events/codex');
+----
+rollout-2026-04-01T11-00-00-aaaaaaaa-0000-0000-0000-000000000002.jsonl
+
+# ============================================================
+# Physical addressing: 1-based contiguous line numbers, exact byte offsets
+# ============================================================
+
+query II
+SELECT line_number, byte_offset FROM read_events(path='test/data_raw_events/claude')
+ORDER BY line_number;
+----
+1	0
+2	178
+3	327
+4	411
+5	412
+6	490
+
+query II
+SELECT line_number, byte_length FROM read_events(path='test/data_raw_events/claude')
+ORDER BY line_number;
+----
+1	177
+2	148
+3	83
+4	0
+5	76
+6	138
+
+query III
+SELECT line_number, byte_offset, byte_length FROM read_events(path='test/data_raw_events/codex')
+ORDER BY line_number;
+----
+1	0	203
+2	204	152
+3	357	122
+4	480	135
+5	617	0
+6	618	86
+
+# byte_offset(n+1) == byte_offset(n) + byte_length(n) + terminator bytes
+query I
+SELECT COUNT(*) FROM (
+    SELECT byte_offset + byte_length
+           + CASE line_ending WHEN 'CRLF' THEN 2 WHEN 'LF' THEN 1 ELSE 0 END AS expected_next,
+           LEAD(byte_offset) OVER (PARTITION BY file_path ORDER BY line_number) AS actual_next
+    FROM read_events(path='test/data_raw_events/codex')
+) WHERE actual_next IS NOT NULL AND actual_next <> expected_next;
+----
+0
+
+# Line bytes + terminator bytes account for the whole file (628 / 704 bytes)
+query I
+SELECT SUM(byte_length + CASE line_ending WHEN 'CRLF' THEN 2 WHEN 'LF' THEN 1 ELSE 0 END)
+FROM read_events(path='test/data_raw_events/claude');
+----
+628
+
+query I
+SELECT SUM(byte_length + CASE line_ending WHEN 'CRLF' THEN 2 WHEN 'LF' THEN 1 ELSE 0 END)
+FROM read_events(path='test/data_raw_events/codex');
+----
+704
+
+# byte_length is bytes, not characters (line 2 carries 'café 🙂')
+query I
+SELECT strlen(raw) = byte_length FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 2;
+----
+true
+
+query I
+SELECT length(raw) < byte_length FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 2;
+----
+true
+
+# ============================================================
+# Losslessness: the relation reconstructs the file byte-for-byte
+# ============================================================
+
+query I
+SELECT encode(string_agg(
+           raw || CASE line_ending WHEN 'CRLF' THEN chr(13) || chr(10) WHEN 'LF' THEN chr(10) ELSE '' END,
+           '' ORDER BY line_number))
+     = (SELECT content FROM read_blob('test/data_raw_events/claude/projects/-Users-testuser-project-raw/aaaaaaaa-0000-0000-0000-000000000001.jsonl'))
+FROM read_events(path='test/data_raw_events/claude');
+----
+true
+
+query I
+SELECT encode(string_agg(
+           raw || CASE line_ending WHEN 'CRLF' THEN chr(13) || chr(10) WHEN 'LF' THEN chr(10) ELSE '' END,
+           '' ORDER BY line_number))
+     = (SELECT content FROM read_blob('test/data_raw_events/codex/sessions/2026/04/01/rollout-2026-04-01T11-00-00-aaaaaaaa-0000-0000-0000-000000000002.jsonl'))
+FROM read_events(path='test/data_raw_events/codex');
+----
+true
+
+# Every raw value round-trips exactly (no replacement characters were needed)
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/claude') WHERE NOT raw_is_exact;
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/codex') WHERE NOT raw_is_exact;
+----
+0
+
+# ============================================================
+# Newline handling: LF, CRLF, and an unterminated final line
+# ============================================================
+
+query II
+SELECT line_number, coalesce(line_ending, '(none)')
+FROM read_events(path='test/data_raw_events/claude') ORDER BY line_number;
+----
+1	LF
+2	LF
+3	LF
+4	LF
+5	CRLF
+6	(none)
+
+query II
+SELECT line_number, coalesce(line_ending, '(none)')
+FROM read_events(path='test/data_raw_events/codex') ORDER BY line_number;
+----
+1	LF
+2	LF
+3	LF
+4	CRLF
+5	LF
+6	(none)
+
+# The CR of a CRLF terminator is stripped from raw, not smuggled into it
+query I
+SELECT raw LIKE '%' || chr(13) || '%' FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 5;
+----
+false
+
+# The blank line is a row of its own, not a skipped line
+query II
+SELECT raw = '', byte_length FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 4;
+----
+true	0
+
+# Claude's unterminated final line is valid JSON; Codex's is a truncated record
+query II
+SELECT line_ending IS NULL, is_valid_json FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 6;
+----
+true	true
+
+query II
+SELECT line_ending IS NULL, is_valid_json FROM read_events(path='test/data_raw_events/codex')
+WHERE line_number = 6;
+----
+true	false
+
+# ============================================================
+# Unknown event types survive verbatim — no mapping, no drop
+# ============================================================
+
+query II
+SELECT event_type, timestamp FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 2;
+----
+mystery_future_event	2026-04-01T10:00:01.000Z
+
+query II
+SELECT line_number, coalesce(event_type, '(none)')
+FROM read_events(path='test/data_raw_events/codex') ORDER BY line_number;
+----
+1	session_meta
+2	response_item
+3	quantum_event
+4	event_msg
+5	(none)
+6	(none)
+
+# Nested content is kept intact inside raw (no flattening, no re-serialization)
+query I
+SELECT raw LIKE '%"deep": [1, 2, {"k": "v"}]%' FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 2;
+----
+true
+
+query I
+SELECT raw LIKE '%"nested":{"a":[null,false,3.5]}%' FROM read_events(path='test/data_raw_events/codex')
+WHERE line_number = 3;
+----
+true
+
+# ============================================================
+# Malformed JSON is kept as a row, with the parser's own message
+# ============================================================
+
+query III
+SELECT line_number, is_valid_json, parse_error IS NOT NULL
+FROM read_events(path='test/data_raw_events/claude')
+WHERE NOT is_valid_json ORDER BY line_number;
+----
+3	false	true
+4	false	true
+
+query III
+SELECT line_number, is_valid_json, parse_error IS NOT NULL
+FROM read_events(path='test/data_raw_events/codex')
+WHERE NOT is_valid_json ORDER BY line_number;
+----
+5	false	true
+6	false	true
+
+# A malformed line still carries its raw text and its address
+query I
+SELECT raw LIKE '%"uuid": "raw-u2"%' FROM read_events(path='test/data_raw_events/claude')
+WHERE line_number = 3;
+----
+true
+
+# Valid lines never carry a parse_error
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/claude')
+WHERE is_valid_json AND parse_error IS NOT NULL;
+----
+0
+
+# ============================================================
+# Real fixtures: the Codex rollout and the Claude project tree
+# ============================================================
+
+query I
+SELECT COUNT(*) > 0 FROM read_events(path='test/data_codex');
+----
+true
+
+query I
+SELECT COUNT(DISTINCT file_path) FROM read_events(path='test/data_codex');
+----
+1
+
+# Claude walks main transcripts and nested subagent transcripts alike
+query I
+SELECT COUNT(DISTINCT file_path) FROM read_events(path='test/data_claude');
+----
+12
+
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_claude') WHERE line_number < 1;
+----
+0
+
+# ============================================================
+# Clear failures: unsupported provider, missing path, non-directory path
+# ============================================================
+
+statement error
+SELECT * FROM read_events(path='test/data_copilot');
+----
+read_events: unsupported provider
+
+statement error
+SELECT * FROM read_events(path='test/data_claude', source='copilot');
+----
+read_events: unsupported provider
+
+statement error
+SELECT * FROM read_events(path='nonexistent_path_that_does_not_exist');
+----
+does not exist
+
+statement error
+SELECT * FROM read_events(path='');
+----
+does not exist
+
+statement error
+SELECT * FROM read_events(path='test/data_raw_events/claude/projects/-Users-testuser-project-raw/aaaaaaaa-0000-0000-0000-000000000001.jsonl', source='claude');
+----
+is not a directory
+
+# A supported provider with no matching files is empty, not an error
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/claude', source='codex');
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_raw_events/codex', source='claude');
+----
+0

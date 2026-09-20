@@ -1,0 +1,11 @@
+{"type":"session_meta","timestamp":"2026-03-12T09:00:00.000Z","payload":{"id":"129ce0d1-2189-7980-bde2-9b5c5028917b","cwd":"/Users/testuser/project","git":{"branch":"main","commit_hash":"def456","repository_url":"git@github.com:testuser/project.git"},"cli_version":"0.109.0","model_provider":"openai","originator":"Codex CLI","source":"cli"}}
+{"type":"turn_context","timestamp":"2026-03-12T09:00:01.000Z","payload":{"model":"gpt-5.3-codex","cwd":"/Users/testuser/project","effort":"high"}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:02.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Patch the file and check status."}]}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:03.000Z","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** Update File: hello.py\n-print(\"hi\")\n+print(\"hello\")\n*** End Patch","call_id":"call_patch_1"}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:04.000Z","payload":{"type":"custom_tool_call_output","call_id":"call_patch_1","output":"Done, patch applied."}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:05.000Z","payload":{"type":"custom_tool_call","name":"repo_status","input":{"path":"/Users/testuser/project","recursive":true},"call_id":"call_status_2"}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:06.000Z","payload":{"type":"custom_tool_call_output","call_id":"call_status_2","output":{"content":[{"type":"text","text":"On branch main, nothing to commit."}]}}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:07.000Z","payload":{"type":"agent_message","content":[{"type":"output_text","text":"Sender: /root/reviewer\nPatch looks good."}]}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:08.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Patched hello.py and confirmed a clean status."}]}}
+{"type":"event_msg","timestamp":"2026-03-12T09:00:08.500Z","payload":{"type":"agent_message","message":"Patched hello.py and confirmed a clean status."}}
+{"type":"event_msg","timestamp":"2026-03-12T09:00:09.000Z","payload":{"type":"token_count","info":{"total_tokens":987}}}

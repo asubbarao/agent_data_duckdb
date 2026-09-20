@@ -1,0 +1,164 @@
+# name: test/sql/codex_fidelity.test
+# description: Codex fidelity fixes — custom_tool_call (string/object input),
+# custom_tool_call_output (plain text and MCP-style content-block output), and
+# the response_item agent_message turn. Does not touch ordinary function_call
+# handling or the read_conversations schema.
+# group: [agent_data]
+
+require agent_data
+
+# ============================================================
+# Row counts
+# user + custom_tool_call + custom_tool_call_output + custom_tool_call +
+# custom_tool_call_output + agent_message + assistant = 7.
+# The event_msg/agent_message duplicate of the closing assistant turn is
+# suppressed because the session already has response_item/message rows.
+# ============================================================
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity');
+----
+7
+
+query II
+SELECT message_type, COUNT(*) AS cnt FROM read_conversations(path='test/data_codex_fidelity')
+GROUP BY message_type ORDER BY message_type;
+----
+agent_message	1
+assistant	1
+custom_tool_call	2
+custom_tool_call_output	2
+user	1
+
+# ============================================================
+# custom_tool_call: raw string input is kept unquoted (not re-escaped as a
+# JSON string literal).
+# ============================================================
+
+query I
+SELECT replace(tool_input, chr(10), '|') FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'custom_tool_call' AND tool_use_id = 'call_patch_1';
+----
+*** Begin Patch|*** Update File: hello.py|-print("hi")|+print("hello")|*** End Patch
+
+query I
+SELECT tool_name FROM read_conversations(path='test/data_codex_fidelity')
+WHERE tool_use_id = 'call_patch_1' AND message_type = 'custom_tool_call';
+----
+apply_patch
+
+# ============================================================
+# custom_tool_call: JSON object input is preserved as literal JSON text, not
+# dropped or double-encoded.
+# ============================================================
+
+query I
+SELECT tool_input FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'custom_tool_call' AND tool_use_id = 'call_status_2';
+----
+{"path":"/Users/testuser/project","recursive":true}
+
+query I
+SELECT tool_name FROM read_conversations(path='test/data_codex_fidelity')
+WHERE tool_use_id = 'call_status_2' AND message_type = 'custom_tool_call';
+----
+repo_status
+
+# ============================================================
+# custom_tool_call_output: plain string output, same as function_call_output.
+# ============================================================
+
+query I
+SELECT message_content FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'custom_tool_call_output' AND tool_use_id = 'call_patch_1';
+----
+Done, patch applied.
+
+# ============================================================
+# custom_tool_call_output: MCP-style `{content: [{type: text, text: ...}]}`
+# wrapper is unwrapped to its text, not serialized as raw JSON.
+# ============================================================
+
+query I
+SELECT message_content FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'custom_tool_call_output' AND tool_use_id = 'call_status_2';
+----
+On branch main, nothing to commit.
+
+# Both custom_tool_call_output rows carry the tool role and their call_id, like
+# function_call_output.
+query II
+SELECT message_role, COUNT(*) FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'custom_tool_call_output'
+GROUP BY message_role;
+----
+tool	2
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'custom_tool_call_output' AND tool_use_id IS NULL;
+----
+0
+
+# ============================================================
+# response_item/agent_message: a real sub-agent turn with its own content
+# blocks, distinct from the event_msg/agent_message user-turn fallback, and
+# not dropped or collapsed into the generic catch-all type.
+# ============================================================
+
+query I
+SELECT replace(message_content, chr(10), '|') FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'agent_message';
+----
+Sender: /root/reviewer|Patch looks good.
+
+query I
+SELECT message_role FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = 'agent_message';
+----
+assistant
+
+# ============================================================
+# Ordinary function_call / function_call_output handling (from the base
+# fixture) stays unaffected by the custom_tool_call additions.
+# ============================================================
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex')
+WHERE message_type IN ('function_call', 'function_call_output');
+----
+2
+
+query II
+SELECT tool_name, tool_use_id FROM read_conversations(path='test/data_codex')
+WHERE message_type = 'function_call';
+----
+shell	call_abc
+
+# ============================================================
+# The closing turn is stored twice by Codex (response_item/message and
+# event_msg/agent_message) but must be counted once, same invariant as the
+# base codex_conversations.test fixture.
+# ============================================================
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_content = 'Patched hello.py and confirmed a clean status.';
+----
+1
+
+# ============================================================
+# Session metadata is still carried forward to the new response_item types.
+# ============================================================
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity')
+WHERE model != 'gpt-5.3-codex' OR git_branch != 'main' OR cwd != '/Users/testuser/project';
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_type = '_parse_error';
+----
+0

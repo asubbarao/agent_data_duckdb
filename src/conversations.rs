@@ -625,6 +625,38 @@ impl Conversations {
                         message_content: item.output.as_ref().map(utils::extract_text_content),
                         ..base
                     }),
+                    // Codex's newer tool protocol. Same shape as function_call
+                    // under a different name, but the arguments arrive in
+                    // `input` rather than `arguments`, as either a raw string
+                    // (e.g. an apply_patch body) or a JSON object.
+                    Some("custom_tool_call") => Some(ConversationRow {
+                        message_type: "custom_tool_call".to_string(),
+                        message_role: Some("tool".to_string()),
+                        tool_name: item.name.clone(),
+                        tool_use_id: item.call_id.clone(),
+                        tool_input: item.input.as_ref().map(Self::codex_tool_input_text),
+                        ..base
+                    }),
+                    // The output can be a plain string (like function_call_output)
+                    // or an MCP-style `{content: [{type: "text", text: ...}]}`
+                    // wrapper; unwrap the latter before extracting text.
+                    Some("custom_tool_call_output") => Some(ConversationRow {
+                        message_type: "custom_tool_call_output".to_string(),
+                        message_role: Some("tool".to_string()),
+                        tool_use_id: item.call_id.clone(),
+                        message_content: item.output.as_ref().map(Self::codex_output_text),
+                        ..base
+                    }),
+                    // A message from/between sub-agents. Distinct from the
+                    // event_msg agent_message the loader already handles as a
+                    // user/assistant fallback: this one is a real turn with
+                    // its own content blocks and must not be dropped.
+                    Some("agent_message") => Some(ConversationRow {
+                        message_type: "agent_message".to_string(),
+                        message_role: Some("assistant".to_string()),
+                        message_content: item.content.as_ref().map(utils::extract_text_content),
+                        ..base
+                    }),
                     Some(other) => Some(ConversationRow {
                         message_type: other.to_string(),
                         ..base
@@ -657,6 +689,26 @@ impl Conversations {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// `custom_tool_call.input` is either a raw string (kept unquoted) or a
+    /// JSON object/array (kept as its literal JSON text) — unlike
+    /// `function_call.arguments`, which is always a JSON-encoded string.
+    fn codex_tool_input_text(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }
+    }
+
+    /// `custom_tool_call_output.output` is either a plain string/array (same
+    /// shape `extract_text_content` already handles) or an MCP-style
+    /// `{content: [...]}` wrapper; unwrap the wrapper before extracting text.
+    fn codex_output_text(value: &serde_json::Value) -> String {
+        match value.get("content") {
+            Some(content) => utils::extract_text_content(content),
+            None => utils::extract_text_content(value),
         }
     }
 }
