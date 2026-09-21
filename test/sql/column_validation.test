@@ -4,6 +4,33 @@
 
 require agent_data
 
+# Conversations: appended parse/provenance columns retain their names and types
+query I
+SELECT COUNT(*)
+FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
+----
+33
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'))
+WHERE column_name IN ('parse_status', 'parse_error', 'raw_json', 'source_path')
+ORDER BY column_name;
+----
+parse_error	VARCHAR
+parse_status	VARCHAR
+raw_json	VARCHAR
+source_path	VARCHAR
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
+WHERE typeof(parse_status) != 'VARCHAR'
+   OR typeof(parse_error) != 'VARCHAR'
+   OR typeof(raw_json) != 'VARCHAR'
+   OR typeof(source_path) != 'VARCHAR';
+----
+0
+
 # ============================================================
 # Conversations: column type validation via typeof()
 # ============================================================
@@ -389,4 +416,3 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
 WHERE reasoning_effort IS NOT NULL;
 ----
 0
-
