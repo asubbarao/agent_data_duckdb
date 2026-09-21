@@ -1,0 +1,35 @@
+# name: test/sql/codex_dropped_events.test
+# description: preserve Codex envelope and event types that are not canonical turns
+# group: [agent_data]
+
+require agent_data
+
+query II
+SELECT message_type, parse_status
+FROM read_conversations(path='test/data_codex_dropped', source='codex')
+ORDER BY message_type;
+----
+realtime_item	unknown_type
+task_started	unknown_type
+token_usage_record	unknown_type
+
+query I
+SELECT coalesce(len(array_agg(message_type)), 0)
+FROM read_conversations(path='test/data_codex_dropped', source='codex')
+WHERE message_type != '_parse_error' AND raw_json IS NOT NULL;
+----
+3
+
+query I
+SELECT coalesce(len(array_agg(message_type)), 0)
+FROM read_conversations(path='test/data_codex_dropped', source='codex')
+WHERE message_type = '_parse_error';
+----
+0
+
+query II
+SELECT message_role, message_content
+FROM read_conversations(path='test/data_codex_dropped', source='codex')
+WHERE message_type = 'realtime_item';
+----
+assistant	Preserved realtime text

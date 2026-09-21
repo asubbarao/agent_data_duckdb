@@ -55,6 +55,7 @@ pub struct CodexTurnContext {
 pub struct CodexResponseItem {
     #[serde(rename = "type")]
     pub item_type: Option<String>,
+    pub id: Option<String>,
     pub role: Option<String>,
     /// list of `{type: input_text|output_text|text, text}` blocks
     pub content: Option<serde_json::Value>,
@@ -82,6 +83,7 @@ pub struct CodexEventMsg {
     #[serde(rename = "type")]
     pub event_type: Option<String>,
     pub message: Option<String>,
+    pub item: Option<serde_json::Value>,
     pub phase: Option<String>,
     pub last_agent_message: Option<String>,
 }

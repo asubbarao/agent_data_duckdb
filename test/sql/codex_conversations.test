@@ -5,18 +5,20 @@
 require agent_data
 
 # ============================================================
-# Row counts — session_meta + turn_context + token_count are NOT rows.
+# Row counts — session_meta + turn_context are metadata-only; token_count is
+# preserved as an unknown event row.
 # The fixture mirrors real Codex: each user/assistant turn is stored twice, in
 # both response_item/message and event_msg/{user,agent}_message. The event_msg
 # copies are a fallback for sessions that lack response_item rows, so when the
 # canonical response_item rows exist they must be the single source of truth.
-# Conversation rows: 2 messages + 1 reasoning + 1 function_call + 1 output = 5
+# Conversation rows: 2 messages + 1 reasoning + 1 function_call + 1 output +
+# 1 preserved token_count event = 6
 # ============================================================
 
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_codex');
 ----
-5
+6
 
 query I
 SELECT COUNT(DISTINCT session_id) FROM read_conversations(path='test/data_codex');
@@ -42,7 +44,7 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_codex') WHERE source != 
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_codex', source='codex');
 ----
-5
+6
 
 # ============================================================
 # Message types
@@ -56,11 +58,13 @@ assistant	1
 function_call	1
 function_call_output	1
 reasoning	1
+token_count	1
 user	1
 
 # Roles: user/assistant messages, tool for function_*
 query II
 SELECT message_role, COUNT(*) AS cnt FROM read_conversations(path='test/data_codex')
+WHERE message_role IS NOT NULL
 GROUP BY message_role ORDER BY message_role;
 ----
 assistant	2
