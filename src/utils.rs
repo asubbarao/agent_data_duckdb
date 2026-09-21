@@ -870,3 +870,15 @@ pub fn url_decode(s: &str) -> String {
     }
     String::from_utf8_lossy(&out).to_string()
 }
+
+/// Render a JSON value as text for a tool-input column.
+///
+/// A JSON string is unwrapped rather than re-serialised, so a shell command
+/// comes back as the command instead of a quoted, backslash-escaped copy of
+/// it. Anything else is serialised as-is.
+pub fn json_text_or_literal(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}

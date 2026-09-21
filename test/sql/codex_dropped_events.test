@@ -1,0 +1,21 @@
+# name: test/sql/codex_dropped_events.test
+# description: Codex envelope and event types that are not conversation turns are kept as rows
+# group: [agent_data]
+
+require agent_data
+
+query III
+SELECT message_type, parse_status, raw_json IS NOT NULL
+FROM read_conversations(path='test/data_codex_dropped', source='codex')
+ORDER BY message_type;
+----
+realtime_item	unknown_type	true
+task_started	unknown_type	true
+token_usage_record	unknown_type	true
+
+query II
+SELECT message_role, message_content
+FROM read_conversations(path='test/data_codex_dropped', source='codex')
+WHERE message_type = 'realtime_item';
+----
+assistant	Preserved realtime text

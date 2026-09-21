@@ -1,0 +1,27 @@
+# name: test/sql/codex_custom_tool_calls.test
+# description: custom tool calls, their outputs and inter-agent messages keep their content
+# group: [agent_data]
+
+require agent_data
+
+# The input is a JSON string, so it comes back as the text itself, not a quoted copy
+query IIII
+SELECT message_type, tool_name, tool_use_id, tool_input = '*** Begin Patch' || chr(10) || '*** End Patch'
+FROM read_conversations(path='test/data_codex_custom_tools', source='codex')
+WHERE message_type = 'custom_tool_call';
+----
+custom_tool_call	apply_patch	call_custom_1	true
+
+query III
+SELECT message_type, tool_use_id, message_content
+FROM read_conversations(path='test/data_codex_custom_tools', source='codex')
+WHERE message_type = 'custom_tool_call_output';
+----
+custom_tool_call_output	call_custom_1	Done!
+
+query II
+SELECT message_role, message_content = 'Sender: worker-1' || chr(10) || 'Patch applied.'
+FROM read_conversations(path='test/data_codex_custom_tools', source='codex')
+WHERE message_type = 'agent_message';
+----
+assistant	true

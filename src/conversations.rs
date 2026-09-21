@@ -508,7 +508,9 @@ impl Conversations {
 // rollout-*.jsonl is a single ordered stream. `session_meta` (first line) and the
 // latest `turn_context` are carried forward and applied to every emitted row —
 // the same "session metadata backfill" technique used for Copilot above.
-// `session_meta` / `turn_context` / `token_count` lines are NOT emitted as rows.
+// Valid `session_meta` / `turn_context` lines update carried metadata and are
+// not emitted; other envelopes, including usage and lifecycle records, remain
+// rows even when their type is not a canonical conversation turn.
 
 impl Conversations {
     fn load_codex_rows(base_path: &std::path::Path) -> Vec<ConversationRow> {
@@ -543,70 +545,82 @@ impl Conversations {
                     _ => continue,
                 };
 
-                let parsed: CodexLine = match serde_json::from_str(&line) {
+                let raw_value: serde_json::Value = match serde_json::from_str(&line) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        rows.push(Self::codex_unparsed_row(
+                            &session_uuid, &file_name, file_line, None, &meta,
+                            current_model.as_deref(), None, "_parse_error", "invalid_json", &line, e.to_string(),
+                        ));
+                        continue;
+                    }
+                };
+
+                let parsed: CodexLine = match serde_json::from_value(raw_value.clone()) {
                     Ok(p) => p,
                     Err(e) => {
-                        let diagnostic = format!("Parse error: {}", e);
-                        rows.push(ConversationRow {
-                            source: "codex".to_string(),
-                            session_id: session_uuid.clone(),
-                            file_name: file_name.clone(),
-                            line_number: file_line,
-                            message_type: "_parse_error".to_string(),
-                            message_content: Some(diagnostic.clone()),
-                            parse_status: Some("invalid_json".to_string()),
-                            parse_error: Some(diagnostic),
-                            raw_json: Some(line),
-                            ..Default::default()
-                        });
+                        let message_type = raw_value.get("type").and_then(|v| v.as_str()).unwrap_or("_parse_error");
+                        let timestamp = raw_value.get("timestamp").and_then(|v| v.as_str()).map(String::from);
+                        rows.push(Self::codex_unparsed_row(
+                            &session_uuid, &file_name, file_line, timestamp, &meta,
+                            current_model.as_deref(), raw_value.get("payload"), message_type, "unsupported_schema", &line, e.to_string(),
+                        ));
                         continue;
                     }
                 };
 
                 match parsed.line_type.as_str() {
                     "session_meta" => {
-                        if let Ok(m) =
-                            serde_json::from_value::<CodexSessionMeta>(parsed.payload.clone())
-                        {
-                            meta = m;
+                        match serde_json::from_value::<CodexSessionMeta>(parsed.payload.clone()) {
+                            Ok(m) => meta = m,
+                            Err(e) => rows.push(Self::codex_unparsed_row(
+                                &session_uuid, &file_name, file_line, parsed.timestamp.clone(), &meta,
+                                current_model.as_deref(), Some(&parsed.payload), &parsed.line_type, "unsupported_schema", &line, e.to_string(),
+                            )),
                         }
                         continue; // not a conversation row
                     }
                     "turn_context" => {
-                        if let Ok(tc) =
-                            serde_json::from_value::<CodexTurnContext>(parsed.payload.clone())
-                        {
-                            if let Some(m) = tc.model {
-                                current_model = Some(m);
+                        match serde_json::from_value::<CodexTurnContext>(parsed.payload.clone()) {
+                            Ok(tc) => {
+                                if let Some(m) = tc.model {
+                                    current_model = Some(m);
+                                }
                             }
+                            Err(e) => rows.push(Self::codex_unparsed_row(
+                                &session_uuid, &file_name, file_line, parsed.timestamp.clone(), &meta,
+                                current_model.as_deref(), Some(&parsed.payload), &parsed.line_type, "unsupported_schema", &line, e.to_string(),
+                            )),
                         }
                         continue;
                     }
                     _ => {}
                 }
 
-                if let Some(mut row) = Self::codex_line_to_row(
+                let mut row = Self::codex_line_to_row(
                     &parsed,
                     session_uuid,
                     &file_name,
                     file_line,
                     &meta,
                     current_model.as_deref(),
-                ) {
+                    &line,
+                );
+                if row.raw_json.is_none() {
                     row.raw_json = Some(line);
-                    if parsed.line_type == "event_msg"
-                        && matches!(row.message_type.as_str(), "user" | "assistant")
+                }
+                if parsed.line_type == "event_msg"
+                    && matches!(row.message_type.as_str(), "user" | "assistant")
+                {
+                    event_msg_fallback.push(row);
+                } else {
+                    if parsed.line_type == "response_item"
+                        && parsed.payload.get("type").and_then(|v| v.as_str())
+                            == Some("message")
                     {
-                        event_msg_fallback.push(row);
-                    } else {
-                        if parsed.line_type == "response_item"
-                            && parsed.payload.get("type").and_then(|v| v.as_str())
-                                == Some("message")
-                        {
-                            has_response_message = true;
-                        }
-                        rows.push(row);
+                        has_response_message = true;
                     }
+                    rows.push(row);
                 }
             }
 
@@ -624,22 +638,65 @@ impl Conversations {
         timestamp: Option<String>,
         meta: &CodexSessionMeta,
         model: Option<&str>,
+        payload: Option<&serde_json::Value>,
     ) -> ConversationRow {
         let git = meta.git.as_ref();
+        let uuid = payload
+            .and_then(|p| p.get("id").or_else(|| p.get("uuid")))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let cwd = payload
+            .and_then(|p| p.get("cwd"))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .or_else(|| meta.cwd.clone());
         ConversationRow {
             source: "codex".to_string(),
             session_id: session_uuid.to_string(),
-            project_path: meta.cwd.clone().unwrap_or_default(),
+            project_path: cwd.clone().unwrap_or_default(),
             file_name: file_name.to_string(),
             line_number,
             timestamp,
-            cwd: meta.cwd.clone(),
+            uuid,
+            cwd,
             git_branch: git.and_then(|g| g.branch.clone()),
             repository: git.and_then(|g| g.repository_url.clone()),
             version: meta.cli_version.clone(),
             model: model.map(String::from),
+            parse_status: Some("ok".to_string()),
             ..Default::default()
         }
+    }
+
+    /// A row for a line that did not fit its expected shape: metadata from what
+    /// could be read, the whole line in `raw_json`, and the error.
+    fn codex_unparsed_row(
+        session_uuid: &str, file_name: &str, line_number: i64, timestamp: Option<String>,
+        meta: &CodexSessionMeta, model: Option<&str>, payload: Option<&serde_json::Value>,
+        message_type: &str, parse_status: &str, line: &str, error: String,
+    ) -> ConversationRow {
+        let base = Self::codex_base_row(session_uuid, file_name, line_number, timestamp, meta, model, payload);
+        Self::codex_preserved_row(base, message_type, parse_status, line, Some(error))
+    }
+
+    fn codex_preserved_row(
+        mut row: ConversationRow,
+        message_type: &str,
+        parse_status: &str,
+        raw_json: &str,
+        parse_error: Option<String>,
+    ) -> ConversationRow {
+        row.message_type = message_type.to_string();
+        row.parse_status = Some(parse_status.to_string());
+        row.parse_error = parse_error;
+        row.raw_json = Some(raw_json.to_string());
+        row
+    }
+
+    fn codex_value_text(value: Option<&serde_json::Value>) -> Option<String> {
+        value
+            .filter(|v| !v.is_null())
+            .map(utils::extract_text_content)
     }
 
     fn codex_line_to_row(
@@ -649,7 +706,8 @@ impl Conversations {
         line_number: i64,
         meta: &CodexSessionMeta,
         model: Option<&str>,
-    ) -> Option<ConversationRow> {
+        raw_json: &str,
+    ) -> ConversationRow {
         let base = Self::codex_base_row(
             session_uuid,
             file_name,
@@ -657,12 +715,23 @@ impl Conversations {
             parsed.timestamp.clone(),
             meta,
             model,
+            Some(&parsed.payload),
         );
 
         match parsed.line_type.as_str() {
             "response_item" => {
-                let item: CodexResponseItem =
-                    serde_json::from_value(parsed.payload.clone()).ok()?;
+                let item: CodexResponseItem = match serde_json::from_value(parsed.payload.clone()) {
+                    Ok(item) => item,
+                    Err(e) => {
+                        return Self::codex_preserved_row(
+                            base,
+                            &parsed.line_type,
+                            "unsupported_schema",
+                            raw_json,
+                            Some(e.to_string()),
+                        );
+                    }
+                };
                 match item.item_type.as_deref() {
                     Some("message") => {
                         // Normalize to a role-specific type (user/assistant/...)
@@ -675,66 +744,167 @@ impl Conversations {
                             Some(other) => other.to_string(),
                             None => "message".to_string(),
                         };
-                        Some(ConversationRow {
+                        ConversationRow {
                             message_type,
                             message_role: role,
                             message_content: item.content.as_ref().map(utils::extract_text_content),
                             ..base
-                        })
+                        }
                     }
-                    Some("reasoning") => Some(ConversationRow {
+                    Some("reasoning") => ConversationRow {
                         message_type: "reasoning".to_string(),
                         message_role: Some("assistant".to_string()),
                         message_content: item.summary.as_ref().map(utils::extract_text_content),
                         ..base
-                    }),
-                    Some("function_call") => Some(ConversationRow {
+                    },
+                    Some("function_call") => ConversationRow {
                         message_type: "function_call".to_string(),
                         message_role: Some("tool".to_string()),
                         tool_name: item.name.clone(),
                         tool_use_id: item.call_id.clone(),
                         tool_input: item.arguments.as_ref().map(|v| v.to_string()),
                         ..base
-                    }),
-                    Some("function_call_output") => Some(ConversationRow {
+                    },
+                    Some("function_call_output") => ConversationRow {
                         message_type: "function_call_output".to_string(),
                         message_role: Some("tool".to_string()),
                         tool_use_id: item.call_id.clone(),
                         message_content: item.output.as_ref().map(utils::extract_text_content),
                         ..base
-                    }),
-                    Some(other) => Some(ConversationRow {
-                        message_type: other.to_string(),
+                    },
+                    // Same shape as function_call; the arguments arrive in `input`.
+                    Some("custom_tool_call") => ConversationRow {
+                        message_type: "custom_tool_call".to_string(),
+                        message_role: Some("tool".to_string()),
+                        tool_name: item.name.clone(),
+                        tool_use_id: item.call_id.clone(),
+                        tool_input: item.input.as_ref().map(utils::json_text_or_literal),
                         ..base
-                    }),
-                    None => None,
+                    },
+                    Some("custom_tool_call_output") => ConversationRow {
+                        message_type: "custom_tool_call_output".to_string(),
+                        message_role: Some("tool".to_string()),
+                        tool_use_id: item.call_id.clone(),
+                        message_content: item.output.as_ref().map(utils::extract_text_content),
+                        ..base
+                    },
+                    // A message from one sub-agent to another (the `event_msg`
+                    // agent_message below is a different record).
+                    Some("agent_message") => ConversationRow {
+                        message_type: "agent_message".to_string(),
+                        message_role: Some("assistant".to_string()),
+                        message_content: item.content.as_ref().map(utils::extract_text_content),
+                        ..base
+                    },
+                    Some(other) => Self::codex_preserved_row(
+                        base,
+                        other,
+                        "unknown_type",
+                        raw_json,
+                        Some(format!("Unknown Codex response_item type: {}", other)),
+                    ),
+                    None => Self::codex_preserved_row(
+                        base,
+                        &parsed.line_type,
+                        "unsupported_schema",
+                        raw_json,
+                        Some("response_item payload has no type".to_string()),
+                    ),
                 }
             }
             "event_msg" => {
-                let ev: CodexEventMsg = serde_json::from_value(parsed.payload.clone()).ok()?;
+                let ev: CodexEventMsg = match serde_json::from_value(parsed.payload.clone()) {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        return Self::codex_preserved_row(
+                            base,
+                            &parsed.line_type,
+                            "unsupported_schema",
+                            raw_json,
+                            Some(e.to_string()),
+                        );
+                    }
+                };
                 match ev.event_type.as_deref() {
                     // event_msg user/agent text duplicates the response_item
                     // message rows above. The loader buffers these and only
                     // emits them for sessions with no response_item/message
                     // rows, so canonical turns are never double-counted.
-                    // task_started / task_complete / token_count are not
-                    // conversation rows.
-                    Some("user_message") => Some(ConversationRow {
+                    Some("user_message") => ConversationRow {
                         message_type: "user".to_string(),
                         message_role: Some("user".to_string()),
                         message_content: ev.message.clone(),
                         ..base
-                    }),
-                    Some("agent_message") => Some(ConversationRow {
+                    },
+                    Some("agent_message") => ConversationRow {
                         message_type: "assistant".to_string(),
                         message_role: Some("assistant".to_string()),
                         message_content: ev.message.clone(),
                         ..base
-                    }),
-                    _ => None,
+                    },
+                    Some(other) => {
+                        let mut row = Self::codex_preserved_row(
+                            base,
+                            other,
+                            "unknown_type",
+                            raw_json,
+                            Some(format!("Unknown Codex event_msg type: {}", other)),
+                        );
+                        if other == "item_completed" {
+                            if let Some(item) = ev.item.as_ref() {
+                                row.uuid = item
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from)
+                                    .or(row.uuid);
+                                row.message_content =
+                                    Self::codex_value_text(item.get("content"));
+                                row.message_role = match item
+                                    .get("type")
+                                    .and_then(|v| v.as_str())
+                                {
+                                    Some("UserMessage") => Some("user".to_string()),
+                                    Some("AgentMessage") => Some("assistant".to_string()),
+                                    _ => None,
+                                };
+                            }
+                        }
+                        row
+                    }
+                    None => Self::codex_preserved_row(
+                        base,
+                        &parsed.line_type,
+                        "unsupported_schema",
+                        raw_json,
+                        Some("event_msg payload has no type".to_string()),
+                    ),
                 }
             }
-            _ => None,
+            _ => {
+                let mut row = Self::codex_preserved_row(
+                    base,
+                    &parsed.line_type,
+                    "unknown_type",
+                    raw_json,
+                    Some(format!("Unknown Codex line type: {}", parsed.line_type)),
+                );
+                match parsed.line_type.as_str() {
+                    "realtime_item" => {
+                        row.message_role = parsed
+                            .payload
+                            .get("role")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        row.message_content = Self::codex_value_text(parsed.payload.get("text"));
+                    }
+                    "compacted" => {
+                        row.message_content =
+                            Self::codex_value_text(parsed.payload.get("message"));
+                    }
+                    _ => {}
+                }
+                row
+            }
         }
     }
 }
