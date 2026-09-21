@@ -45,6 +45,9 @@ pub struct ConversationRow {
     /// Grok-only: per-message effort, else session summary backfill.
     reasoning_effort: Option<String>,
     repository: Option<String>,
+    parse_status: Option<String>,
+    parse_error: Option<String>,
+    raw_json: Option<String>,
 }
 
 pub struct Conversations;
@@ -71,6 +74,39 @@ impl Conversations {
             git_branch: base.git_branch.clone(),
             cwd: base.cwd.clone(),
             version: base.version.clone(),
+            ..Default::default()
+        }
+    }
+
+    fn claude_preserved_row(source: &str, project_dir: &str, file_name: &str, is_agent: bool,
+                            file_session_id: &str, line_number: i64, value: &serde_json::Value,
+                            message_type: &str, parse_status: &str, parse_error: Option<String>,
+                            raw_json: &str) -> ConversationRow {
+        let string_field = |name: &str| {
+            value.get(name).and_then(|v| v.as_str()).map(String::from)
+        };
+        let cwd = string_field("cwd");
+        ConversationRow {
+            source: source.to_string(),
+            session_id: string_field("sessionId")
+                .or_else(|| string_field("session_id"))
+                .unwrap_or_else(|| file_session_id.to_string()),
+            project_path: cwd.clone().unwrap_or_else(|| utils::decode_project_path(project_dir)),
+            project_dir: project_dir.to_string(),
+            file_name: file_name.to_string(),
+            is_agent,
+            line_number,
+            message_type: message_type.to_string(),
+            uuid: string_field("uuid"),
+            parent_uuid: string_field("parentUuid").or_else(|| string_field("parent_uuid")),
+            timestamp: string_field("timestamp"),
+            slug: string_field("slug"),
+            git_branch: string_field("gitBranch").or_else(|| string_field("git_branch")),
+            cwd,
+            version: string_field("version"),
+            parse_status: Some(parse_status.to_string()),
+            parse_error,
+            raw_json: Some(raw_json.to_string()),
             ..Default::default()
         }
     }
@@ -200,17 +236,49 @@ impl Conversations {
                     _ => continue,
                 };
 
-                let row = match serde_json::from_str::<ConversationMessage>(&line) {
-                    Ok(msg) => Self::claude_message_to_row(source, msg, project_dir, &file_name, *is_agent, &file_session_id, file_line),
+                let mut row = match serde_json::from_str::<serde_json::Value>(&line) {
                     Err(e) => {
+                        let diagnostic = format!("Parse error: {}", e);
                         let mut row = Self::claude_simple_row(source, project_dir, &file_name, *is_agent, &file_session_id, file_line, "_parse_error");
-                        row.message_content = Some(format!("Parse error: {}", e));
+                        row.message_content = Some(diagnostic.clone());
+                        row.parse_status = Some("invalid_json".to_string());
+                        row.parse_error = Some(diagnostic);
+                        row.raw_json = Some(line.clone());
                         row
                     }
+                    Ok(value) => {
+                        let message_type = value.get("type").and_then(|v| v.as_str());
+                        let known_type = matches!(message_type,
+                            Some("user") | Some("assistant") | Some("system") |
+                            Some("file-history-snapshot") | Some("queue-operation") | Some("summary"));
+
+                        if known_type {
+                            match serde_json::from_value::<ConversationMessage>(value.clone()) {
+                                Ok(msg) => Self::claude_message_to_row(source, msg, project_dir, &file_name, *is_agent, &file_session_id, file_line),
+                                Err(e) => Self::claude_preserved_row(
+                                    source, project_dir, &file_name, *is_agent, &file_session_id,
+                                    file_line, &value, message_type.unwrap_or("_unknown_type"),
+                                    "unsupported_schema", Some(e.to_string()), &line,
+                                ),
+                            }
+                        } else {
+                            Self::claude_preserved_row(
+                                source, project_dir, &file_name, *is_agent, &file_session_id,
+                                file_line, &value, message_type.unwrap_or("_unknown_type"),
+                                "unknown_type", None, &line,
+                            )
+                        }
+                    }
                 };
+                if row.parse_status.is_none() {
+                    row.parse_status = Some("ok".to_string());
+                }
 
                 if file_cwd.is_none() && row.cwd.is_some() {
                     file_cwd = row.cwd.clone();
+                }
+                if row.raw_json.is_none() {
+                    row.raw_json = Some(line);
                 }
                 rows.push(row);
             }
@@ -279,13 +347,17 @@ impl Conversations {
                 let event = match serde_json::from_str::<CopilotEvent>(&line) {
                     Ok(e) => e,
                     Err(e) => {
+                        let diagnostic = format!("Parse error: {}", e);
                         rows.push(ConversationRow {
                             source: "copilot".to_string(),
                             session_id: meta.session_id.clone(),
                             file_name: file_name.clone(),
                             line_number: file_line,
                             message_type: "_parse_error".to_string(),
-                            message_content: Some(format!("Parse error: {}", e)),
+                            message_content: Some(diagnostic.clone()),
+                            parse_status: Some("invalid_json".to_string()),
+                            parse_error: Some(diagnostic),
+                            raw_json: Some(line),
                             ..Default::default()
                         });
                         continue;
@@ -312,7 +384,8 @@ impl Conversations {
                     }
                 }
 
-                let row = Self::copilot_event_to_row(&event, &meta, &file_name, file_line);
+                let mut row = Self::copilot_event_to_row(&event, &meta, &file_name, file_line);
+                row.raw_json = Some(line);
                 rows.push(row);
             }
 
@@ -473,13 +546,17 @@ impl Conversations {
                 let parsed: CodexLine = match serde_json::from_str(&line) {
                     Ok(p) => p,
                     Err(e) => {
+                        let diagnostic = format!("Parse error: {}", e);
                         rows.push(ConversationRow {
                             source: "codex".to_string(),
                             session_id: session_uuid.clone(),
                             file_name: file_name.clone(),
                             line_number: file_line,
                             message_type: "_parse_error".to_string(),
-                            message_content: Some(format!("Parse error: {}", e)),
+                            message_content: Some(diagnostic.clone()),
+                            parse_status: Some("invalid_json".to_string()),
+                            parse_error: Some(diagnostic),
+                            raw_json: Some(line),
                             ..Default::default()
                         });
                         continue;
@@ -508,7 +585,7 @@ impl Conversations {
                     _ => {}
                 }
 
-                if let Some(row) = Self::codex_line_to_row(
+                if let Some(mut row) = Self::codex_line_to_row(
                     &parsed,
                     session_uuid,
                     &file_name,
@@ -516,6 +593,7 @@ impl Conversations {
                     &meta,
                     current_model.as_deref(),
                 ) {
+                    row.raw_json = Some(line);
                     if parsed.line_type == "event_msg"
                         && matches!(row.message_type.as_str(), "user" | "assistant")
                     {
@@ -680,9 +758,14 @@ impl Conversations {
                 Err(_) => continue,
             };
 
+            let raw_messages: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .and_then(|v| v.get("messages").and_then(|m| m.as_array()).cloned())
+                .unwrap_or_default();
             let session = match serde_json::from_str::<GeminiSession>(&content) {
                 Ok(s) => s,
                 Err(e) => {
+                    let diagnostic = format!("Parse error: {}", e);
                     rows.push(ConversationRow {
                         source: "gemini".to_string(),
                         session_id: project_hash.clone(),
@@ -690,7 +773,10 @@ impl Conversations {
                         file_name: file_name.clone(),
                         line_number: 1,
                         message_type: "_parse_error".to_string(),
-                        message_content: Some(format!("Parse error: {}", e)),
+                        message_content: Some(diagnostic.clone()),
+                        parse_status: Some("invalid_json".to_string()),
+                        parse_error: Some(diagnostic),
+                        raw_json: Some(content),
                         ..Default::default()
                     });
                     continue;
@@ -711,6 +797,7 @@ impl Conversations {
             let mut message_index: i64 = 0;
             for msg in &session.messages {
                 message_index += 1;
+                let raw_json = raw_messages.get((message_index - 1) as usize).map(|v| v.to_string());
                 let (message_type, message_role) = Self::gemini_type_role(msg.message_type.as_deref());
 
                 let mut row = ConversationRow {
@@ -728,6 +815,7 @@ impl Conversations {
                     message_content: msg.content.clone().filter(|c| !c.is_empty()),
                     model: msg.model.clone(),
                     cwd: if project_path.is_empty() { None } else { Some(project_path.clone()) },
+                    raw_json: raw_json.clone(),
                     ..Default::default()
                 };
 
@@ -748,6 +836,7 @@ impl Conversations {
                 for tc in tool_calls {
                     rows.push(ConversationRow {
                         source: "gemini".to_string(),
+                        raw_json: raw_json.clone(),
                         session_id: session_id.clone(),
                         project_path: project_path.clone(),
                         project_dir: project_hash.clone(),
@@ -819,7 +908,7 @@ impl Conversations {
         // queries the bundled-SQLite version used to run.)
         let mut composers: std::collections::HashMap<String, CursorComposer> =
             std::collections::HashMap::new();
-        let mut bubbles: std::collections::HashMap<(String, String), CursorBubble> =
+        let mut bubbles: std::collections::HashMap<(String, String), (CursorBubble, String)> =
             std::collections::HashMap::new();
 
         for row in db.read_table("cursorDiskKV") {
@@ -838,7 +927,8 @@ impl Conversations {
                 let parts: Vec<&str> = key.splitn(3, ':').collect();
                 if parts.len() == 3 {
                     if let Ok(b) = serde_json::from_slice::<CursorBubble>(&row.value) {
-                        bubbles.insert((parts[1].to_string(), parts[2].to_string()), b);
+                        let raw = String::from_utf8_lossy(&row.value).into_owned();
+                        bubbles.insert((parts[1].to_string(), parts[2].to_string()), (b, raw));
                     }
                 }
             }
@@ -863,7 +953,9 @@ impl Conversations {
                     Some(b) => b.clone(),
                     None => continue,
                 };
-                let bubble = bubbles.get(&(composer_id.clone(), bubble_id.clone()));
+                let entry = bubbles.get(&(composer_id.clone(), bubble_id.clone()));
+                let bubble = entry.map(|(b, _)| b);
+                let raw_json = entry.map(|(_, raw)| raw.clone());
 
                 let (message_type, role) = match header.bubble_type {
                     Some(1) => ("user", Some("user")),
@@ -881,6 +973,7 @@ impl Conversations {
 
                 rows.push(ConversationRow {
                     source: "cursor".to_string(),
+                    raw_json,
                     session_id: composer_id.clone(),
                     file_name: "state.vscdb".to_string(),
                     line_number: idx as i64 + 1,
@@ -1056,15 +1149,22 @@ impl Conversations {
                                 session_uuid,
                                 file_line,
                             ));
+                            row.raw_json = Some(line.clone());
                             rows.push(row);
                         }
                     }
-                    Err(e) => rows.push(ConversationRow {
-                        message_type: "_parse_error".to_string(),
-                        message_content: Some(format!("Parse error: {}", e)),
-                        uuid: Some(Self::grok_row_uuid(None, session_uuid, file_line)),
-                        ..base
-                    }),
+                    Err(e) => {
+                        let diagnostic = format!("Parse error: {}", e);
+                        rows.push(ConversationRow {
+                            message_type: "_parse_error".to_string(),
+                            message_content: Some(diagnostic.clone()),
+                            parse_status: Some("invalid_json".to_string()),
+                            parse_error: Some(diagnostic),
+                            raw_json: Some(line),
+                            uuid: Some(Self::grok_row_uuid(None, session_uuid, file_line)),
+                            ..base
+                        })
+                    }
                 }
             }
         }
@@ -1189,6 +1289,8 @@ impl TableFunc for Conversations {
             vtab::varchar("git_branch"),    vtab::varchar("cwd"),
             vtab::varchar("version"),       vtab::varchar("stop_reason"),
             vtab::varchar("reasoning_effort"), vtab::varchar("repository"),
+            vtab::varchar("parse_status"),  vtab::varchar("parse_error"),
+            vtab::varchar("raw_json"),
         ]
     }
 
@@ -1236,5 +1338,8 @@ impl TableFunc for Conversations {
         vtab::set_varchar_opt(output, 26, idx, row.stop_reason.as_deref());
         vtab::set_varchar_opt(output, 27, idx, row.reasoning_effort.as_deref());
         vtab::set_varchar_opt(output, 28, idx, row.repository.as_deref());
+        vtab::set_varchar(output, 29, idx, row.parse_status.as_deref().unwrap_or("ok"));
+        vtab::set_varchar_opt(output, 30, idx, row.parse_error.as_deref());
+        vtab::set_varchar_opt(output, 31, idx, row.raw_json.as_deref());
     }
 }

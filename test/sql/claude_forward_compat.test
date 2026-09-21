@@ -1,0 +1,28 @@
+# name: test/sql/claude_forward_compat.test
+# description: preserve valid Claude records with unknown future types
+# group: [agent_data]
+
+require agent_data
+
+# A valid unknown type preserves the row metadata and raw payload.
+query TTTTTT
+SELECT message_type, parse_status, uuid, session_id, timestamp, cwd
+FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
+WHERE line_number = 1;
+----
+future-checkpoint	unknown_type	ffffffff-1111-4111-8111-111111111111	dddddddd-1111-4111-8111-111111111111	2026-09-20T12:00:00.000Z	/Users/testuser/future-project
+
+query I
+SELECT json_extract_string(raw_json, '$.payload.note')
+FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
+WHERE line_number = 1;
+----
+must survive
+
+# A truncated line is the only kind that remains a parse error.
+query III
+SELECT message_type, parse_status, parse_error IS NOT NULL
+FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
+WHERE line_number = 2;
+----
+_parse_error	invalid_json	true

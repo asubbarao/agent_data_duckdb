@@ -1,0 +1,2 @@
+{"type":"future-checkpoint","uuid":"ffffffff-1111-4111-8111-111111111111","parentUuid":"eeeeeeee-1111-4111-8111-111111111111","timestamp":"2026-09-20T12:00:00.000Z","sessionId":"dddddddd-1111-4111-8111-111111111111","cwd":"/Users/testuser/future-project","version":"99.0.0","slug":"future-safe-fox","gitBranch":"future","payload":{"note":"must survive","items":[1,2,3]}}
+{"type":"future-broken"
