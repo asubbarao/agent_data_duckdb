@@ -131,6 +131,8 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
 
         let path = resolve_path(bind);
         let source = resolve_source(bind);
+        // An unknown source is rejected at bind time, never auto-detected.
+        crate::detect::validate_source(source.as_deref())?;
         Ok(GenericBindData { path, source, rows: Mutex::new(None) })
     }
 

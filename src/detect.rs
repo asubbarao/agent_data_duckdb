@@ -71,9 +71,22 @@ pub fn detect_provider(path: &Path) -> Provider {
     Provider::Unknown
 }
 
-/// Parse an explicit source string into a Provider.
+/// The source names accepted by `parse_source`, for error messages.
+pub const KNOWN_SOURCES: &[&str] = &[
+    "claude", "claude-desktop", "copilot", "cursor", "codex", "gemini", "grok",
+];
+
+/// Parse an explicit source string into a Provider. `_` and spaces are
+/// treated as `-`, so `claude_desktop` names the same provider as
+/// `claude-desktop`.
 pub fn parse_source(source: &str) -> Provider {
-    match source.to_lowercase().as_str() {
+    let normalised: String = source
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c == '_' || c == ' ' { '-' } else { c })
+        .collect();
+    match normalised.as_str() {
         "claude" => Provider::Claude,
         "claude-desktop" => Provider::ClaudeDesktop,
         "copilot" => Provider::Copilot,
@@ -85,13 +98,23 @@ pub fn parse_source(source: &str) -> Provider {
     }
 }
 
-/// Resolve provider: explicit source overrides auto-detection.
+/// Resolve provider: an explicit source is used as given, never replaced by
+/// auto-detection. `validate_source` rejects unknown names at bind time.
 pub fn resolve_provider(path: &Path, source: Option<&str>) -> Provider {
-    if let Some(s) = source {
-        let p = parse_source(s);
-        if p != Provider::Unknown {
-            return p;
-        }
+    match source {
+        Some(s) => parse_source(s),
+        None => detect_provider(path),
     }
-    detect_provider(path)
+}
+
+/// Reject an explicit `source` that names no known provider, listing the
+/// valid names.
+pub fn validate_source(source: Option<&str>) -> Result<(), String> {
+    match source {
+        Some(s) if parse_source(s) == Provider::Unknown => Err(format!(
+            "unknown source {s:?}; expected one of: {}",
+            KNOWN_SOURCES.join(", ")
+        )),
+        _ => Ok(()),
+    }
 }

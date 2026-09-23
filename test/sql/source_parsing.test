@@ -1,0 +1,51 @@
+# name: test/sql/source_parsing.test
+# description: the `source` parameter is normalised, authoritative and validated
+# group: [agent_data]
+
+require agent_data
+
+# `_` and spaces are accepted as `-`
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude_desktop');
+----
+8
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='  CLAUDE DESKTOP  ');
+----
+8
+
+# An explicit source is used as given: asking for Claude Code against a
+# Desktop directory returns nothing rather than auto-detecting Desktop
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude');
+----
+0
+
+# An unknown source is a bind-time error naming the valid sources
+statement error
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude-desktopp');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_conversations(source='');
+----
+claude-desktop
+
+# Validation applies to every table function
+statement error
+SELECT COUNT(*) FROM read_plans(source='nonsense');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_stats(source='nonsense');
+----
+unknown source
+
+# Omitting source still auto-detects
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop');
+----
+8
