@@ -176,26 +176,59 @@ fn desktop_files_under(
     registry_dir: &Path,
     projects_dir: &Path,
 ) -> Vec<(String, bool, PathBuf)> {
-    // A relative or empty base path encodes to a prefix that matches far too
-    // much (`""` matches every project directory).
-    if !base_path.is_absolute() {
+    let desktop = DesktopSessions::new(base_path, registry_dir);
+    if desktop.prefix.is_none() || !projects_dir.is_dir() {
         return Vec::new();
     }
-    let prefix = encode_project_path(base_path);
-    if prefix.len() <= 1 || !projects_dir.is_dir() {
-        return Vec::new();
-    }
-
-    let mut registry_session_ids = HashSet::new();
-    collect_desktop_registry_session_ids(registry_dir, &mut registry_session_ids);
-
     discover_project_jsonl_files(projects_dir)
         .into_iter()
-        .filter(|(encoded, _, path)| {
-            encoded_is_under(encoded, &prefix)
-                || registry_session_ids.contains(&fallback_session_id(path))
-        })
+        .filter(|(encoded, _, path)| desktop.owns(encoded, path))
         .collect()
+}
+
+/// Where Claude Desktop keeps its data when nothing else says so:
+/// `~/Library/Application Support/Claude` on macOS, `%APPDATA%\Claude` on
+/// Windows, `~/.config/Claude` on Linux.
+pub fn default_claude_desktop_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("Claude"))
+}
+
+/// Recognises the Claude Code transcripts that belong to Claude Desktop
+/// sessions: the encoded cwd is inside Desktop's data directory (a scratch
+/// workspace), or Desktop's session registry lists the session.
+pub struct DesktopSessions {
+    prefix: Option<String>,
+    registry_session_ids: HashSet<String>,
+}
+
+impl DesktopSessions {
+    /// Read the registry of the Desktop data directory `base_path`.
+    pub fn at(base_path: &Path) -> Self {
+        Self::new(base_path, &base_path.join("claude-code-sessions"))
+    }
+
+    fn new(base_path: &Path, registry_dir: &Path) -> Self {
+        // A relative or empty base path encodes to a prefix that matches far too
+        // much (`""` matches every project directory).
+        let prefix = Some(encode_project_path(base_path))
+            .filter(|p| base_path.is_absolute() && p.len() > 1);
+        let mut registry_session_ids = HashSet::new();
+        if prefix.is_some() {
+            collect_desktop_registry_session_ids(registry_dir, &mut registry_session_ids);
+        }
+        DesktopSessions { prefix, registry_session_ids }
+    }
+
+    /// Is the transcript at `path`, in project directory `encoded`, Desktop's?
+    pub fn owns(&self, encoded: &str, path: &Path) -> bool {
+        match &self.prefix {
+            Some(prefix) => {
+                encoded_is_under(encoded, prefix)
+                    || self.registry_session_ids.contains(&fallback_session_id(path))
+            }
+            None => false,
+        }
+    }
 }
 
 /// Collect `cliSessionId` from every `local_*.json` under Desktop's session
@@ -1043,6 +1076,24 @@ mod desktop_discovery_tests {
         assert!(found.iter().any(|(_, is_agent, p)| *is_agent && p.ends_with("agent-child.jsonl")));
         assert!(found.iter().any(|(_, is_agent, p)| !is_agent && p.ends_with("scratch-session.jsonl")));
         assert!(!found.iter().any(|(_, _, p)| p.ends_with("unregistered-session.jsonl")));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn desktop_sessions_own_scratch_and_registered_transcripts() {
+        let tmp = std::env::temp_dir().join(format!("agent_data_client_{}", std::process::id()));
+        let base = tmp.join("Claude");
+        std::fs::create_dir_all(base.join("claude-code-sessions/org")).unwrap();
+        std::fs::write(base.join("claude-code-sessions/org/local_a.json"), r#"{"cliSessionId":"registered"}"#).unwrap();
+
+        let desktop = DesktopSessions::at(&base);
+        let scratch = format!("{}-scratch-workspaces-w1", encode_project_path(&base));
+        assert!(desktop.owns(&scratch, Path::new("/p/any/unregistered.jsonl")));
+        assert!(desktop.owns("-Users-me-repo", Path::new("/p/-Users-me-repo/registered.jsonl")));
+        assert!(desktop.owns("-Users-me-repo", Path::new("/p/-Users-me-repo/registered/subagents/agent-1.jsonl")));
+        assert!(!desktop.owns("-Users-me-repo", Path::new("/p/-Users-me-repo/unregistered.jsonl")));
+        assert!(!DesktopSessions::at(Path::new("relative/Claude")).owns(&scratch, Path::new("registered.jsonl")));
 
         std::fs::remove_dir_all(&tmp).ok();
     }

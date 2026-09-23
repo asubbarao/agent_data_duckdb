@@ -141,12 +141,14 @@ Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'co
 
 Reads conversation/event data.
 - **Claude:** JSONL files from `projects/<project>/<session>.jsonl` (including nested sub-agent transcripts at `projects/<project>/<session>/subagents/agent-*.jsonl`)
-- **Claude Desktop:** JSONL files from `local-agent-mode-sessions/**/.claude/projects/<project>/<session>.jsonl` (same schema as Claude Code)
+- **Claude Desktop:** JSONL files from `local-agent-mode-sessions/**/.claude/projects/<project>/<session>.jsonl` (same schema as Claude Code), plus the transcripts a Desktop session writes to `~/.claude/projects/` (its cwd is inside the Desktop directory, or Desktop's `claude-code-sessions/` registry lists it)
 - **Copilot:** JSONL events from `session-state/<uuid>/events.jsonl`
 - **Cursor:** `composerData:*` / `bubbleId:*` rows from `state.vscdb` (read with the pure-Rust `src/vscdb.rs` reader; one composer = one session)
 - **Codex:** JSONL rollout streams from `sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`
 - **Gemini:** JSON chat checkpoints from `tmp/<project-hash>/chats/session-<ts>-<id>.json` (one file = one session; each tool call is also emitted as a `tool_call` row)
 - **Grok:** JSONL transcripts from `sessions/<%encoded-cwd>/<session-uuid>/chat_history.jsonl`, with session metadata from sibling `summary.json`. **Timestamps** and **token** columns come from sibling `updates.jsonl` (wire event stream — chat_history itself has no time/usage fields). Subagent children linked via `…/<parent>/subagents/<child>/meta.json` set `is_agent=true` (and session-level `parent_uuid`).
+
+> **The two Claude sources overlap by design.** A Desktop session that runs Claude Code writes its transcript under `~/.claude/projects/`, so `source = 'claude'` on `~/.claude` returns it too, labelled `client = 'claude-desktop'` against Desktop's default directory (every other Claude Code session is `client = 'claude-code'`). `source = 'claude-desktop'` returns the same records with `client = 'claude-desktop'`. Read one or the other: all Claude sessions from `~/.claude` (filter on `client` to split them), or only Desktop's. A `UNION ALL` of the two counts every Desktop session twice.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -180,6 +182,7 @@ Reads conversation/event data.
 | `reasoning_effort` | VARCHAR | Grok-only: per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other sources |
 | `repository` | VARCHAR | GitHub repository (Copilot; Grok from `summary.git_remotes[0]`) |
 | `file_path` | VARCHAR | Absolute path of the transcript or store file (as `read_plans.file_path`) |
+| `client` | VARCHAR | Claude only: `claude-code` or `claude-desktop`, the client that wrote the transcript; NULL for other sources |
 
 **Message type mappings:**
 

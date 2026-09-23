@@ -190,3 +190,19 @@ query I
 SELECT COUNT(*) FROM read_stats(path='test/data_claude_desktop');
 ----
 0
+
+# ============================================================
+# Client label: every Desktop row says so, and each record appears once
+# ============================================================
+
+query TI
+SELECT client, len(array_agg(line_number)) FROM read_conversations(path='test/data_claude_desktop', source='claude-desktop')
+GROUP BY client;
+----
+claude-desktop	8
+
+query I
+SELECT len(array_agg(line_number)) = COUNT(DISTINCT (file_path, line_number))
+FROM read_conversations(path='test/data_claude_desktop', source='claude-desktop');
+----
+true

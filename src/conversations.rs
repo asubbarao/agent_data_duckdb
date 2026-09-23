@@ -21,6 +21,9 @@ pub struct ConversationRow {
     file_name: String,
     /// Absolute path of the file this row was read from (as `read_plans.file_path`).
     file_path: String,
+    /// Claude-only: the client that wrote the transcript, `claude-code` or
+    /// `claude-desktop`.
+    client: Option<String>,
     is_agent: bool,
     line_number: i64,
     message_type: String,
@@ -172,9 +175,19 @@ impl Conversations {
         }
     }
 
+    /// Every transcript under `projects/`, each labelled with the client that
+    /// wrote it. A Claude Desktop session that runs Claude Code writes here
+    /// too, so the Desktop sessions found by `source = 'claude-desktop'` are
+    /// also returned here, with `client = 'claude-desktop'`.
     fn load_claude_rows(base_path: &std::path::Path) -> Vec<ConversationRow> {
         let files = utils::discover_conversation_files(base_path);
-        Self::load_claude_jsonl_rows("claude", &files)
+        let desktop = utils::default_claude_desktop_path().map(|p| utils::DesktopSessions::at(&p));
+        Self::load_claude_jsonl_rows("claude", &files, |encoded, path| {
+            match &desktop {
+                Some(d) if d.owns(encoded, path) => "claude-desktop",
+                _ => "claude-code",
+            }
+        })
     }
 
     /// Claude Desktop ("Cowork") stores transcripts using the same camelCase
@@ -182,14 +195,16 @@ impl Conversations {
     /// the discovered file set and the `source` label differ.
     fn load_claude_desktop_rows(base_path: &std::path::Path) -> Vec<ConversationRow> {
         let files = utils::discover_claude_desktop_files(base_path);
-        Self::load_claude_jsonl_rows("claude-desktop", &files)
+        Self::load_claude_jsonl_rows("claude-desktop", &files, |_, _| "claude-desktop")
     }
 
     /// Parse a set of discovered Claude-schema JSONL transcript files into rows.
-    /// Shared by both `Provider::Claude` and `Provider::ClaudeDesktop`.
+    /// Shared by both `Provider::Claude` and `Provider::ClaudeDesktop`;
+    /// `client_of` names the client that wrote each file.
     fn load_claude_jsonl_rows(
         source: &str,
         files: &[(String, bool, std::path::PathBuf)],
+        client_of: impl Fn(&str, &std::path::Path) -> &'static str,
     ) -> Vec<ConversationRow> {
         let mut rows = Vec::new();
 
@@ -239,6 +254,10 @@ impl Conversations {
                 }
             }
             Self::stamp_file_path(&mut rows[file_rows_start..], file_path);
+            let client = client_of(project_dir, file_path);
+            for row in &mut rows[file_rows_start..] {
+                row.client = Some(client.to_string());
+            }
         }
         rows
     }
@@ -1214,7 +1233,7 @@ impl TableFunc for Conversations {
             vtab::varchar("git_branch"),    vtab::varchar("cwd"),
             vtab::varchar("version"),       vtab::varchar("stop_reason"),
             vtab::varchar("reasoning_effort"), vtab::varchar("repository"),
-            vtab::varchar("file_path"),
+            vtab::varchar("file_path"),     vtab::varchar("client"),
         ]
     }
 
@@ -1263,5 +1282,6 @@ impl TableFunc for Conversations {
         vtab::set_varchar_opt(output, 27, idx, row.reasoning_effort.as_deref());
         vtab::set_varchar_opt(output, 28, idx, row.repository.as_deref());
         vtab::set_varchar(output, 29, idx, &row.file_path);
+        vtab::set_varchar_opt(output, 30, idx, row.client.as_deref());
     }
 }

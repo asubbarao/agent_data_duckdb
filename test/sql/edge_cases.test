@@ -139,14 +139,14 @@ unknown source
 # Column count validation (correct number of columns)
 # ============================================================
 
-# Conversations: 30 columns (includes file_path + reasoning_tokens + reasoning_effort)
+# Conversations: 31 columns (includes file_path + client + reasoning_tokens + reasoning_effort)
 query I
-SELECT COUNT(*) = 30 FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
+SELECT COUNT(*) = 31 FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
 ----
 true
 
 # Additive file_path: prior ordinals preserved (is_agent stays at position 6);
-# file_path is appended as column 30.
+# file_path is appended as column 30, client as column 31.
 query I
 WITH cols AS (
   SELECT list(column_name) AS names
@@ -155,6 +155,7 @@ WITH cols AS (
 SELECT names[6] = 'is_agent'
    AND names[29] = 'repository'
    AND names[30] = 'file_path'
+   AND names[31] = 'client'
 FROM cols;
 ----
 true

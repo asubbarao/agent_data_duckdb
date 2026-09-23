@@ -49,3 +49,23 @@ query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop');
 ----
 8
+
+# `client` names the Claude client; a Claude Code transcript is 'claude-code'
+query TI
+SELECT client, COUNT(DISTINCT session_id) FROM read_conversations(path='test/data_claude', source='claude')
+GROUP BY client;
+----
+claude-code	6
+
+# ... each record once ...
+query I
+SELECT len(array_agg(line_number)) = COUNT(DISTINCT (file_path, line_number))
+FROM read_conversations(path='test/data_claude', source='claude');
+----
+true
+
+# ... and other sources leave it NULL
+query I
+SELECT bool_and(client IS NULL) FROM read_conversations(path='test/data_codex', source='codex');
+----
+true
