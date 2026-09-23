@@ -179,6 +179,10 @@ Reads conversation/event data.
 | `stop_reason` | VARCHAR | Claude API stop reason (NULL for Grok) |
 | `reasoning_effort` | VARCHAR | Grok-only: per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other sources |
 | `repository` | VARCHAR | GitHub repository (Copilot; Grok from `summary.git_remotes[0]`) |
+| `parse_status` | VARCHAR | `ok`; `unknown_type` (a record type the reader does not map, kept whole); `unsupported_schema` (a known type whose payload no longer fits); `invalid_json` |
+| `parse_error` | VARCHAR | Why a record was not `ok` |
+| `raw_json` | VARCHAR | The source record as read: the JSONL line (Gemini: the message object; Cursor: the bubble) |
+| `message_subtype` | VARCHAR | Claude `attachment` rows: the attachment kind (`hook_success`, `queued_command`, ...); NULL elsewhere |
 
 **Message type mappings:**
 
@@ -188,6 +192,8 @@ Reads conversation/event data.
 | `assistant` | `assistant` | `assistant` (from `gemini`) | `assistant` | Assistant response |
 | `system` | — | — | `system` | System prompt |
 | `summary` | — | — | — | Conversation summary |
+| `attachment` | — | — | — | Context Claude Code attached to the turn (hook output, reminders, queued prompts); kind in `message_subtype` |
+| `ai-title` / `custom-title` / `last-prompt` / `pr-link` | — | — | — | Session title, last prompt or PR URL as `message_content` |
 | — | `reasoning` | — | `reasoning` | Assistant reasoning (summary text only) |
 | — | `turn_start` / `turn_end` | — | — | Assistant turn boundaries |
 | — | `tool_start` / `tool_result` | `tool_call` | `tool_call` / `tool_result` | Tool execution events |

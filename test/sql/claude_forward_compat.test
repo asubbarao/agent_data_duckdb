@@ -26,3 +26,52 @@ FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
 WHERE line_number = 2;
 ----
 _parse_error	invalid_json	true
+
+# An attachment is a mapped type: its kind is message_subtype, its text is
+# message_content, and a hook's tool call is tool_use_id.
+query IITTT
+SELECT line_number, parse_status, message_subtype, tool_use_id, session_id
+FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
+WHERE message_type = 'attachment'
+ORDER BY line_number;
+----
+3	ok	hook_additional_context	toolu_fixture_1	dddddddd-1111-4111-8111-111111111111
+4	ok	hook_success	toolu_fixture_1	dddddddd-1111-4111-8111-111111111111
+5	ok	queued_command	NULL	dddddddd-1111-4111-8111-111111111111
+6	ok	deferred_tools_delta	NULL	dddddddd-1111-4111-8111-111111111111
+
+# Hook context is a list of strings; an empty hook `content` falls back to
+# stdout; a queued prompt keeps its text blocks; a tool-list delta has no text.
+query II
+SELECT line_number, message_content = CASE line_number
+    WHEN 3 THEN 'The hook reformatted the file.' || chr(10) || 'Read it before editing.'
+    WHEN 4 THEN '1 file reformatted' || chr(10)
+    WHEN 5 THEN 'Run the tests' END
+FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
+WHERE message_type = 'attachment'
+ORDER BY line_number;
+----
+3	true
+4	true
+5	true
+6	NULL
+
+# Title, prompt and PR records carry their one string as message_content.
+query TTT
+SELECT message_type, parse_status, message_content
+FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
+WHERE line_number BETWEEN 7 AND 10
+ORDER BY line_number;
+----
+ai-title	ok	Fix the future parser
+custom-title	ok	parser work
+last-prompt	ok	make the tests pass
+pr-link	ok	https://github.com/example/future-project/pull/7
+
+# A type the reader does not map is still kept, and still says so.
+query TTT
+SELECT message_type, parse_status, message_content
+FROM read_conversations(path='test/data_claude_forward_compat', source='claude')
+WHERE line_number = 11;
+----
+atis-latch	unknown_type	NULL

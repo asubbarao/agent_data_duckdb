@@ -48,6 +48,8 @@ pub struct ConversationRow {
     parse_status: Option<String>,
     parse_error: Option<String>,
     raw_json: Option<String>,
+    /// Claude-only: the kind of an `attachment` record (`attachment.type`).
+    message_subtype: Option<String>,
 }
 
 pub struct Conversations;
@@ -109,6 +111,51 @@ impl Conversations {
             raw_json: Some(raw_json.to_string()),
             ..Default::default()
         }
+    }
+
+    /// Record types with no struct in `ConversationMessage` that the reader
+    /// still maps: an `attachment` (hook output, reminders, queued prompts,
+    /// ...) and the session records whose payload is one string. Fills the
+    /// row's text and returns false for any other type.
+    fn claude_untyped_record(row: &mut ConversationRow, value: &serde_json::Value) -> bool {
+        let string_at = |v: &serde_json::Value, key: &str| {
+            v.get(key).and_then(|v| v.as_str()).map(String::from)
+        };
+        match row.message_type.as_str() {
+            "attachment" => {
+                let attachment = value.get("attachment").unwrap_or(&serde_json::Value::Null);
+                row.message_subtype = string_at(attachment, "type");
+                row.tool_use_id = string_at(attachment, "toolUseID");
+                row.message_content = Self::claude_attachment_text(attachment);
+            }
+            "ai-title" => row.message_content = string_at(value, "aiTitle"),
+            "custom-title" => row.message_content = string_at(value, "customTitle"),
+            "last-prompt" => row.message_content = string_at(value, "lastPrompt"),
+            "pr-link" => row.message_content = string_at(value, "prUrl"),
+            _ => return false,
+        }
+        true
+    }
+
+    /// The readable text of an attachment: the first non-empty field among
+    /// those its kinds use for text. Kinds that carry only structure (file
+    /// snapshots, tool-list deltas, mode flags) have none and stay NULL.
+    fn claude_attachment_text(attachment: &serde_json::Value) -> Option<String> {
+        const TEXT_FIELDS: [&str; 9] = [
+            "text", "content", "prompt", "snippet", "planContent", "banner", "description", "stdout", "stderr",
+        ];
+        TEXT_FIELDS.iter().find_map(|key| {
+            let text = match attachment.get(*key)? {
+                serde_json::Value::String(s) => s.clone(),
+                // Hook context is a list of strings; a queued prompt is a list of blocks.
+                serde_json::Value::Array(items) => items.iter()
+                    .filter_map(|i| i.as_str().or_else(|| i.get("text").and_then(|t| t.as_str())))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => return None,
+            };
+            if text.trim().is_empty() { None } else { Some(text) }
+        })
     }
 
     fn claude_simple_row(source: &str, project_dir: &str, file_name: &str, is_agent: bool,
@@ -262,11 +309,15 @@ impl Conversations {
                                 ),
                             }
                         } else {
-                            Self::claude_preserved_row(
+                            let mut row = Self::claude_preserved_row(
                                 source, project_dir, &file_name, *is_agent, &file_session_id,
                                 file_line, &value, message_type.unwrap_or("_unknown_type"),
                                 "unknown_type", None, &line,
-                            )
+                            );
+                            if Self::claude_untyped_record(&mut row, &value) {
+                                row.parse_status = Some("ok".to_string());
+                            }
+                            row
                         }
                     }
                 };
@@ -1458,7 +1509,7 @@ impl TableFunc for Conversations {
             vtab::varchar("version"),       vtab::varchar("stop_reason"),
             vtab::varchar("reasoning_effort"), vtab::varchar("repository"),
             vtab::varchar("parse_status"),  vtab::varchar("parse_error"),
-            vtab::varchar("raw_json"),
+            vtab::varchar("raw_json"),      vtab::varchar("message_subtype"),
         ]
     }
 
@@ -1509,5 +1560,6 @@ impl TableFunc for Conversations {
         vtab::set_varchar(output, 29, idx, row.parse_status.as_deref().unwrap_or("ok"));
         vtab::set_varchar_opt(output, 30, idx, row.parse_error.as_deref());
         vtab::set_varchar_opt(output, 31, idx, row.raw_json.as_deref());
+        vtab::set_varchar_opt(output, 32, idx, row.message_subtype.as_deref());
     }
 }

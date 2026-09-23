@@ -139,9 +139,9 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_copilot', source='unknow
 # Column count validation (correct number of columns)
 # ============================================================
 
-# Conversations: 32 columns (parse_status, parse_error, raw_json appended)
+# Conversations: 33 columns (parse_status, parse_error, raw_json, message_subtype appended)
 query I
-SELECT COUNT(*) = 32 FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
+SELECT COUNT(*) = 33 FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
 ----
 true
 
