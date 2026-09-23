@@ -796,6 +796,12 @@ impl Conversations {
                         message_content: item.content.as_ref().map(utils::extract_text_content),
                         ..base
                     },
+                    // Server-side compaction: the replaced history is only in
+                    // `encrypted_content`, so the row has no text.
+                    Some("compaction") => ConversationRow {
+                        message_type: "compaction".to_string(),
+                        ..base
+                    },
                     Some(other) => Self::codex_preserved_row(
                         base,
                         other,
@@ -842,35 +848,33 @@ impl Conversations {
                         message_content: ev.message.clone(),
                         ..base
                     },
-                    Some(other) => {
-                        let mut row = Self::codex_preserved_row(
-                            base,
-                            other,
-                            "unknown_type",
-                            raw_json,
-                            Some(format!("Unknown Codex event_msg type: {}", other)),
-                        );
-                        if other == "item_completed" {
-                            if let Some(item) = ev.item.as_ref() {
-                                row.uuid = item
-                                    .get("id")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from)
-                                    .or(row.uuid);
-                                row.message_content =
-                                    Self::codex_value_text(item.get("content"));
-                                row.message_role = match item
-                                    .get("type")
-                                    .and_then(|v| v.as_str())
-                                {
-                                    Some("UserMessage") => Some("user".to_string()),
-                                    Some("AgentMessage") => Some("assistant".to_string()),
-                                    _ => None,
-                                };
-                            }
+                    Some("item_completed") => {
+                        let mut row = ConversationRow {
+                            message_type: "item_completed".to_string(),
+                            ..base
+                        };
+                        if let Some(item) = ev.item.as_ref() {
+                            row.uuid = item
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
+                                .or(row.uuid);
+                            row.message_content = Self::codex_value_text(item.get("content"));
+                            row.message_role = match item.get("type").and_then(|v| v.as_str()) {
+                                Some("UserMessage") => Some("user".to_string()),
+                                Some("AgentMessage") => Some("assistant".to_string()),
+                                _ => None,
+                            };
                         }
                         row
                     }
+                    Some(other) => Self::codex_preserved_row(
+                        base,
+                        other,
+                        "unknown_type",
+                        raw_json,
+                        Some(format!("Unknown Codex event_msg type: {}", other)),
+                    ),
                     None => Self::codex_preserved_row(
                         base,
                         &parsed.line_type,
@@ -880,31 +884,25 @@ impl Conversations {
                     ),
                 }
             }
-            _ => {
-                let mut row = Self::codex_preserved_row(
-                    base,
-                    &parsed.line_type,
-                    "unknown_type",
-                    raw_json,
-                    Some(format!("Unknown Codex line type: {}", parsed.line_type)),
-                );
-                match parsed.line_type.as_str() {
-                    "realtime_item" => {
-                        row.message_role = parsed
-                            .payload
-                            .get("role")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        row.message_content = Self::codex_value_text(parsed.payload.get("text"));
-                    }
-                    "compacted" => {
-                        row.message_content =
-                            Self::codex_value_text(parsed.payload.get("message"));
-                    }
-                    _ => {}
-                }
-                row
-            }
+            "realtime_item" => ConversationRow {
+                message_type: parsed.line_type.clone(),
+                message_role: parsed.payload.get("role").and_then(|v| v.as_str()).map(String::from),
+                message_content: Self::codex_value_text(parsed.payload.get("text")),
+                ..base
+            },
+            // The summary a compaction replaced the history with.
+            "compacted" => ConversationRow {
+                message_type: parsed.line_type.clone(),
+                message_content: Self::codex_value_text(parsed.payload.get("message")),
+                ..base
+            },
+            _ => Self::codex_preserved_row(
+                base,
+                &parsed.line_type,
+                "unknown_type",
+                raw_json,
+                Some(format!("Unknown Codex line type: {}", parsed.line_type)),
+            ),
         }
     }
 }

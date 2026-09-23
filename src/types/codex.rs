@@ -31,7 +31,9 @@ pub struct CodexSessionMeta {
     pub cli_version: Option<String>,
     pub model_provider: Option<String>,
     pub originator: Option<String>,
-    pub source: Option<String>,
+    /// `"cli"`, `"exec"`, ... for a top-level session, but an object such as
+    /// `{"subagent": {"thread_spawn": {...}}}` for a sub-agent's session.
+    pub source: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

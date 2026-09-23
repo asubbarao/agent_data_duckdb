@@ -1,0 +1,38 @@
+# name: test/sql/codex_compaction.test
+# description: a sub-agent's session_meta and compaction records parse
+# group: [agent_data]
+
+require agent_data
+
+# A sub-agent writes `source` as an object; session_meta must still parse, so
+# it emits no row of its own.
+query III
+SELECT line_number, message_type, parse_status
+FROM read_conversations(path='test/data_codex_compaction', source='codex')
+ORDER BY line_number;
+----
+3	user	ok
+4	compaction	ok
+5	compacted	ok
+
+# ... and its cwd, version and git metadata reach every row.
+query IIII
+SELECT DISTINCT cwd, version, git_branch, repository
+FROM read_conversations(path='test/data_codex_compaction', source='codex');
+----
+/Users/testuser/project	0.130.0	main	https://github.com/example/project.git
+
+# Server-side compaction keeps its id; the replaced history is encrypted, so no text.
+query II
+SELECT uuid, message_content IS NULL
+FROM read_conversations(path='test/data_codex_compaction', source='codex')
+WHERE message_type = 'compaction';
+----
+cmp_fixture_1	true
+
+query I
+SELECT message_content
+FROM read_conversations(path='test/data_codex_compaction', source='codex')
+WHERE message_type = 'compacted';
+----
+Summary of the earlier turns

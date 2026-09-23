@@ -1,0 +1,5 @@
+{"timestamp":"2026-09-21T10:00:00.000Z","type":"session_meta","payload":{"id":"019ce0d1-aaaa-7980-bde2-000000000004","cwd":"/Users/testuser/project","originator":"codex_exec","cli_version":"0.130.0","source":{"subagent":{"thread_spawn":{"parent_thread_id":"019ce0d1-aaaa-7980-bde2-000000000001","depth":1,"agent_path":"/root/worker","agent_nickname":"Peirce","agent_role":null}}},"model_provider":"openai","git":{"branch":"main","commit_hash":"abc123","repository_url":"https://github.com/example/project.git"}}}
+{"timestamp":"2026-09-21T10:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.3-codex","cwd":"/Users/testuser/project"}}
+{"timestamp":"2026-09-21T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Summarise the repository"}]}}
+{"timestamp":"2026-09-21T10:05:00.000Z","type":"response_item","payload":{"type":"compaction","id":"cmp_fixture_1","encrypted_content":"gAAAAAB-fixture"}}
+{"timestamp":"2026-09-21T10:05:01.000Z","type":"compacted","payload":{"message":"Summary of the earlier turns","replacement_history":[]}}
