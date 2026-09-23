@@ -66,6 +66,8 @@ pub struct CodexResponseItem {
     pub call_id: Option<String>,
     // function_call_output
     pub output: Option<serde_json::Value>,
+    /// `custom_tool_call` arguments (a JSON string holding the command or script).
+    pub input: Option<serde_json::Value>,
 }
 
 /// `payload` of an `event_msg` line.
@@ -75,6 +77,7 @@ pub struct CodexEventMsg {
     #[serde(rename = "type")]
     pub event_type: Option<String>,
     pub message: Option<String>,
+    pub item: Option<serde_json::Value>,
     pub phase: Option<String>,
     pub last_agent_message: Option<String>,
 }
