@@ -1,0 +1,49 @@
+# name: test/sql/lossless.test
+# description: every row from every provider carries its source record in raw_json
+# group: [agent_data]
+
+require agent_data
+
+# No provider may emit a row without the record it came from
+query II
+SELECT source, len(array_agg(line_number))
+FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_claude_desktop')
+    UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_codex')
+    UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_gemini')
+    UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_grok')
+    UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_cursor')
+)
+WHERE raw_json IS NULL
+GROUP BY source ORDER BY source;
+----
+
+# raw_json is the record itself, so its own fields agree with the parsed columns
+query I
+SELECT coalesce(len(array_agg(line_number)), 0)
+FROM read_conversations(path='test/data_claude')
+WHERE parse_status = 'ok' AND uuid IS NOT NULL
+  AND from_json(raw_json, '{"uuid":"VARCHAR"}').uuid != uuid;
+----
+0
+
+query I
+SELECT coalesce(len(array_agg(line_number)), 0)
+FROM read_conversations(path='test/data_codex')
+WHERE from_json(raw_json, '{"timestamp":"VARCHAR"}').timestamp != timestamp;
+----
+0
+
+# Line-based providers: one row per line, or a row-count that agrees with the file
+query I
+WITH lines AS (
+    SELECT len(array_agg(l)) AS n
+    FROM read_csv('test/data_claude/projects/**/*.jsonl', columns := {'l': 'VARCHAR'}, delim := chr(1), quote := '', header := false)
+), rows AS (
+    SELECT len(array_agg(line_number)) AS n FROM read_conversations(path='test/data_claude')
+)
+SELECT lines.n = rows.n FROM lines, rows;
+----
+true

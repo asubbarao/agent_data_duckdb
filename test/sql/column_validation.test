@@ -4,6 +4,17 @@
 
 require agent_data
 
+# Appended parse columns
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'))
+WHERE column_name IN ('parse_status', 'parse_error', 'raw_json')
+ORDER BY column_name;
+----
+parse_error	VARCHAR
+parse_status	VARCHAR
+raw_json	VARCHAR
+
 # ============================================================
 # Conversations: column type validation via typeof()
 # ============================================================
