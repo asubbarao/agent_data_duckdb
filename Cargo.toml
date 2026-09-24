@@ -3,6 +3,7 @@ name = "agent_data"
 version = "0.1.0"
 edition = "2021"
 description = "DuckDB extension for reading AI coding agent data (Claude Code, Claude Desktop, GitHub Copilot, Cursor)"
+build = "build.rs"
 
 [lib]
 crate-type = ["cdylib"]
