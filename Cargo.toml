@@ -10,9 +10,6 @@ crate-type = ["cdylib"]
 [profile.release]
 lto = true
 strip = true
-# DuckDB extensions must not unwind over the C ABI. This also avoids MinGW's
-# unavailable libgcc_eh runtime in the static distribution toolchain.
-panic = "abort"
 
 [dependencies]
 duckdb = { version = "=1.10505.0", features = ["loadable-extension"] }
