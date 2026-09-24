@@ -35,6 +35,12 @@ check_target_duckdb_version:
 
 configure: venv platform extension_version duckdb_git_version
 
+# Artifact identity must follow the current checkout, including incremental builds.
+extension_version:
+	@$(VERSION_COMMAND)
+
+build_extension_with_metadata_debug build_extension_with_metadata_release: extension_version
+
 .PHONY: duckdb_git_version
 duckdb_git_version:
 	@mkdir -p configure
