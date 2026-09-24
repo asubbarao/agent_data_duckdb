@@ -23,7 +23,7 @@ FROM read_events(path='test/data_raw_events/claude');
 true
 
 query I
-SELECT bool_and(starts_with(file_path, '/'))
+SELECT bool_and(ends_with(replace(file_path, '\\', '/'), file_name))
 FROM read_events(path='test/data_raw_events/codex');
 ----
 true
