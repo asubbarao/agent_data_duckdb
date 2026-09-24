@@ -1,4 +1,4 @@
-.PHONY: clean clean_all
+.PHONY: clean clean_all test_build_script
 
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -47,8 +47,14 @@ release: build_extension_library_release build_extension_with_metadata_release
 build_extension_library_debug build_extension_library_release build_extension_with_metadata_debug build_extension_with_metadata_release: check_target_duckdb_version
 
 test: test_debug
-test_debug: test_extension_debug
-test_release: test_extension_release
+test_debug: test_build_script test_extension_debug
+test_release: test_build_script test_extension_release
+
+test_build_script:
+	@test_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$test_dir"' EXIT; \
+	rustc --edition=2021 --test build.rs -o "$$test_dir/build_script_tests"; \
+	"$$test_dir/build_script_tests"
 
 clean: clean_build clean_rust
 clean_all: clean_configure clean
