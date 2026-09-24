@@ -48,7 +48,30 @@ impl Events {
     /// on a provider `read_events` does not implement: a raw reader that
     /// silently returns nothing is indistinguishable from a lossless read of an
     /// empty directory.
-    fn load(path: Option<&str>, source: Option<&str>) -> Result<Vec<EventRow>, Box<dyn Error>> {
+    fn load(
+        path: Option<&str>,
+        source: Option<&str>,
+        include_archived: bool,
+    ) -> Result<Vec<EventRow>, Box<dyn Error>> {
+        let provider = source
+            .map(detect::parse_source)
+            .unwrap_or_else(|| detect::detect_provider(&utils::resolve_data_path(path)));
+
+        if provider == Provider::Codex {
+            let discovery =
+                crate::codex_discovery::discover_codex_rollouts(path, include_archived)?;
+            let mut rows = Vec::new();
+            for discovered in discovery.files {
+                Self::scan_file(
+                    "codex",
+                    &discovered.fallback_session_id,
+                    &discovered.file_path,
+                    &mut rows,
+                )?;
+            }
+            return Ok(rows);
+        }
+
         let base_path = utils::resolve_data_path(path);
 
         if !base_path.exists() {
@@ -67,18 +90,8 @@ impl Events {
 
         let base_path = base_path.canonicalize()?;
         // An explicit typo must not fall back to auto-detection.
-        let provider = source
-            .map(detect::parse_source)
-            .unwrap_or_else(|| detect::detect_provider(&base_path));
         let (source_name, files) = match provider {
             Provider::Claude => ("claude", Self::claude_files(&base_path)?),
-            Provider::Codex => {
-                let mut files = Vec::new();
-                let mut seen = std::collections::HashSet::new();
-                Self::codex_files(&base_path.join("sessions"), &mut files, &mut seen)?;
-                files.sort_by(|a, b| a.1.cmp(&b.1));
-                ("codex", files)
-            }
             other => {
                 return Err(format!(
                     "read_events: unsupported provider {:?} for path '{}' — read_events \
@@ -127,43 +140,6 @@ impl Events {
         Ok(files)
     }
 
-    fn codex_files(
-        dir: &Path,
-        files: &mut Vec<(String, PathBuf)>,
-        seen: &mut std::collections::HashSet<PathBuf>,
-    ) -> Result<(), Box<dyn Error>> {
-        let children = entries(dir)?;
-        if children.is_empty() {
-            return Ok(());
-        }
-        if !seen.insert(dir.canonicalize()?) {
-            return Ok(());
-        }
-        for entry in children {
-            let path = entry.path();
-            if entry.metadata()?.is_dir() {
-                Self::codex_files(&path, files, seen)?;
-            } else {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if let Some(stem) = name
-                    .strip_prefix("rollout-")
-                    .and_then(|n| n.strip_suffix(".jsonl"))
-                {
-                    let session = stem
-                        .rsplit('-')
-                        .take(5)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect::<Vec<_>>()
-                        .join("-");
-                    files.push((session, path));
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Split one file into physical lines without normalizing anything.
     ///
     /// Newline handling: `\n` (LF) and `\r\n` (CRLF) terminate a line; the
@@ -193,6 +169,8 @@ impl Events {
 
         let mut offset = 0usize;
         let mut line_number = 0i64;
+        let first_row = out.len();
+        let mut native_session_id = None;
 
         while offset < bytes.len() {
             let newline = bytes[offset..].iter().position(|b| *b == b'\n');
@@ -211,6 +189,18 @@ impl Events {
             let raw_bytes = &bytes[offset..content_end];
             let (raw, raw_is_exact) = decode_line(raw_bytes);
             let (is_valid_json, parse_error, event_type, timestamp) = probe_json(raw_bytes);
+            if source == "codex" && event_type.as_deref() == Some("session_meta") {
+                native_session_id = serde_json::from_slice::<serde_json::Value>(raw_bytes)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .pointer("/payload/id")
+                            .and_then(|id| id.as_str())
+                            .map(str::to_string)
+                    })
+                    .filter(|id| !id.is_empty())
+                    .or(native_session_id);
+            }
 
             line_number += 1;
             out.push(EventRow {
@@ -232,6 +222,12 @@ impl Events {
             });
 
             offset = next;
+        }
+
+        if let Some(native_session_id) = native_session_id {
+            for row in &mut out[first_row..] {
+                row.session_id = native_session_id.clone();
+            }
         }
 
         Ok(())
@@ -269,12 +265,17 @@ mod tests {
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
+            static NEXT_FIXTURE: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
             let nonce = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir()
-                .join(format!("agent-data-events-{}-{nonce}", std::process::id()));
+            let sequence = NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "agent-data-events-{}-{nonce}-{sequence}",
+                std::process::id()
+            ));
             std::fs::create_dir(&path).unwrap();
             Self(path)
         }
@@ -319,11 +320,11 @@ mod tests {
     fn explicit_unknown_source_never_falls_back() {
         let fixture = Fixture::new();
         std::fs::create_dir(fixture.0.join("projects")).unwrap();
-        let error = Events::load(fixture.0.to_str(), Some("claudee"))
+        let error = Events::load(fixture.0.to_str(), Some("claudee"), false)
             .err()
             .unwrap();
         assert!(error.to_string().contains("unsupported provider"));
-        assert!(Events::load(fixture.0.to_str(), Some("claude"))
+        assert!(Events::load(fixture.0.to_str(), Some("claude"), false)
             .unwrap()
             .is_empty());
     }
@@ -332,7 +333,7 @@ mod tests {
     fn broken_discovery_tree_is_an_error() {
         let fixture = Fixture::new();
         std::fs::write(fixture.0.join("projects"), b"not a directory").unwrap();
-        let error = Events::load(fixture.0.to_str(), Some("claude"))
+        let error = Events::load(fixture.0.to_str(), Some("claude"), false)
             .err()
             .unwrap();
         assert!(error.to_string().contains("failed to list"));
@@ -350,6 +351,34 @@ mod tests {
         .err()
         .unwrap();
         assert!(error.to_string().contains("failed to read"));
+    }
+
+    #[test]
+    fn codex_discovery_respects_archive_selection_and_explicit_home() {
+        let fixture = Fixture::new();
+        let active = fixture
+            .0
+            .join("sessions/2026/09/23/rollout-2026-09-23T00-00-00-active.jsonl");
+        let archived = fixture
+            .0
+            .join("archived_sessions/2026/09/22/rollout-2026-09-22T00-00-00-archived.jsonl");
+        std::fs::create_dir_all(active.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(archived.parent().unwrap()).unwrap();
+        std::fs::write(&active, b"{\"type\":\"active\"}\nnot-json").unwrap();
+        std::fs::write(&archived, b"{\"type\":\"archived\"}\n").unwrap();
+
+        let active_rows = Events::load(fixture.0.to_str(), Some("codex"), false).unwrap();
+        assert_eq!(active_rows.len(), 2);
+        assert!(active_rows
+            .iter()
+            .all(|row| row.file_name == "rollout-2026-09-23T00-00-00-active.jsonl"));
+        assert!(!active_rows[1].is_valid_json);
+
+        let all_rows = Events::load(fixture.0.to_str(), Some("codex"), true).unwrap();
+        assert_eq!(all_rows.len(), 3);
+        assert!(all_rows
+            .iter()
+            .any(|row| row.file_name == "rollout-2026-09-22T00-00-00-archived.jsonl"));
     }
 }
 
@@ -395,14 +424,26 @@ impl TableFunc for Events {
     }
 
     fn load_rows(path: Option<&str>, source: Option<&str>) -> Vec<EventRow> {
-        Self::load(path, source).unwrap_or_default()
+        Self::load(path, source, false).unwrap_or_default()
     }
 
     fn try_load_rows(
         path: Option<&str>,
         source: Option<&str>,
     ) -> Result<Vec<EventRow>, Box<dyn Error>> {
-        Self::load(path, source)
+        Self::load(path, source, false)
+    }
+
+    fn supports_include_archived() -> bool {
+        true
+    }
+
+    fn try_load_rows_with_options(
+        path: Option<&str>,
+        source: Option<&str>,
+        include_archived: bool,
+    ) -> Result<Vec<EventRow>, Box<dyn Error>> {
+        Self::load(path, source, include_archived)
     }
 
     fn write_row(output: &mut DataChunkHandle, idx: usize, row: &EventRow) {

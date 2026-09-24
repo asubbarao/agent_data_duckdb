@@ -121,8 +121,9 @@ FROM read_conversations(path='~/.gemini');  -- detected as Gemini CLI
 ### Available Functions
 
 All functions accept two optional parameters:
-- **`path`** — data directory path (default: `~/.claude`). Auto-detected from folder structure (`local-agent-mode-sessions/` → Claude Desktop, `projects/` → Claude, `session-state/` → Copilot, a `state.vscdb` file → Cursor, `sessions/<YYYY>/` → Codex, `tmp/` + `installation_id` → Gemini CLI, `sessions/<%encoded-cwd>/` → Grok). Grok lives at `~/.grok`, so pass `path='~/.grok'` (or `source='grok'`).
+- **`path`** — data directory path (default: `~/.claude` for legacy no-argument calls; `source='codex'` uses `CODEX_HOME` or `~/.codex`). Auto-detected from folder structure (`local-agent-mode-sessions/` → Claude Desktop, `projects/` → Claude, `session-state/` → Copilot, a `state.vscdb` file → Cursor, `sessions/<YYYY>/` → Codex, `tmp/` + `installation_id` → Gemini CLI, `sessions/<%encoded-cwd>/` → Grok). An explicit Codex path can name its home, sessions directory, or one rollout file. Grok lives at `~/.grok`, so pass `path='~/.grok'` (or `source='grok'`).
 - **`source`** — explicit provider override: `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`. Use when auto-detection fails or for non-standard directory layouts.
+- **`include_archived`** — for Codex directory discovery, include `archived_sessions/` (default `false`).
 
 Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`) as the first column.
 
@@ -133,7 +134,7 @@ Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'co
 
 > **Cursor** support is gated behind the default-on `cursor` cargo feature. It reads `state.vscdb` with a self-contained, pure-Rust, read-only SQLite reader (`src/vscdb.rs`) — no external dependency and no bundled C SQLite, so every target arch (including `windows_amd64_mingw`) builds with negligible size overhead. Build with `--no-default-features` to drop it. Only `read_conversations()` is implemented for Cursor; the other tables return no rows for `source='cursor'`.
 
-> **Codex** conversation data is read **only** from `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. The `~/.codex/*.sqlite` files (app automation / logging / inbox) are intentionally ignored. Codex has no extra build dependencies.
+> **Codex** conversation data is read from active rollouts under `CODEX_HOME` (default `~/.codex`) and, with `include_archived := true`, archived rollouts. `session_index.jsonl` and the versioned state SQLite database enrich titles, thread relationships, and other metadata; transcript reading still works if either index is unavailable. See [the Codex column mapping](docs/codex.md).
 
 > **Grok** has no extra build dependencies. Transcripts live at
 > `~/.grok/sessions/<%encoded-cwd>/<session-uuid>/chat_history.jsonl` with

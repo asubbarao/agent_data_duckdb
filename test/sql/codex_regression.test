@@ -1,0 +1,292 @@
+# name: test/sql/codex_regression.test
+# description: Codex home discovery and fidelity regressions across CLI, Desktop, exec agents, archives, usage, and event families
+# group: [agent_data]
+
+require agent_data
+
+# The active home contains three transcripts. Native session ids deliberately do
+# not occur in their filenames, so this also proves session_meta wins over the
+# documented filename fallback.
+query I
+SELECT COUNT(DISTINCT session_id) FROM read_conversations(path='test/data_codex_regression', source='codex');
+----
+3
+
+query I
+SELECT COUNT(DISTINCT session_id) FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE session_id = 'cli-native-0001' AND file_name LIKE '%cli-filename-is-not-native%';
+----
+1
+
+# Archives are opt-in. The active three sessions do not include the archived
+# transcript; the explicit flag adds it without duplicating any active file.
+query I
+SELECT COUNT(DISTINCT session_id) FROM read_conversations(path='test/data_codex_regression', source='codex', include_archived=true);
+----
+4
+
+query I
+SELECT archived FROM read_conversations(path='test/data_codex_regression', source='codex', include_archived=true)
+WHERE session_id = 'archived-native-0004' AND message_content = 'This archived transcript must be opt-in.';
+----
+true
+
+# Distinguish Desktop, CLI, and exec-agent provenance while retaining the
+# compatibility source label `codex`.
+query IIII
+SELECT DISTINCT source, client, originator, thread_source
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE session_id IN ('cli-native-0001', 'desktop-native-0002', 'child-native-0003')
+  AND message_type IN ('assistant', 'agent_message')
+ORDER BY session_id, message_type;
+----
+codex	exec	Codex exec	NULL
+codex	cli	Codex CLI	cli
+codex	desktop	desktop-app	desktop
+
+# Indexed metadata is additive to rollout metadata and unknown index fields are
+# retained in metadata instead of discarded.
+query III
+SELECT slug, session_created_at, session_updated_at
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE session_id = 'cli-native-0001' AND message_type = 'assistant'
+  AND uuid IN ('item-cli-answer-a', 'item-cli-answer-b')
+ORDER BY line_number;
+----
+CLI indexed title	2026-05-01T09:00:00Z	2026-05-01T09:10:00Z
+CLI indexed title	2026-05-01T09:00:00Z	2026-05-01T09:10:00Z
+
+query I
+SELECT metadata LIKE '%desktop_workspace%' FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE session_id = 'desktop-native-0002' AND message_type = 'assistant';
+----
+true
+
+# The same user text in separate turns is two distinct native records, not a
+# session-wide duplicate. Their record identities are nonempty and stable on a
+# reread.
+query II
+SELECT COUNT(*), COUNT(DISTINCT record_id)
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE session_id = 'cli-native-0001' AND message_content = 'Repeat this exact message.';
+----
+2	2
+
+query I
+SELECT COUNT(*) FROM (
+  SELECT record_id FROM read_conversations(path='test/data_codex_regression', source='codex')
+  WHERE record_id IS NULL OR record_id = ''
+);
+----
+0
+
+# Turn context changes apply at turn boundaries. The second turn must not
+# inherit the first model/cwd/effort.
+query III
+SELECT model, cwd, reasoning_effort
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-user-b';
+----
+gpt-5.5-codex	/work/agent-data-renamed	high
+
+query III
+SELECT model, cwd, reasoning_effort
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-user-a';
+----
+gpt-5.4-codex	/work/agent-data	medium
+
+# Tool failures retain both the call relationship and status. Object/string
+# arguments are normalized once, without JSON-string double encoding.
+query III
+SELECT tool_name, tool_use_id, tool_input
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-call-a';
+----
+shell	call-cli-fail	{"command":"false"}
+
+query III
+SELECT tool_name, tool_use_id, status
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-output-a';
+----
+shell	call-cli-fail	failed
+
+# Native item ids and real item-parent links remain distinct from deterministic
+# record identity and cross-session agent lineage.
+query IIIII
+SELECT uuid, parent_uuid, is_agent, parent_session_id, forked_from_session_id
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-child-agent';
+----
+item-child-agent	item-cli-answer-b	true	cli-native-0001	desktop-native-0002
+
+query III
+SELECT agent_path, agent_nickname, agent_role
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-child-agent';
+----
+/root/reviewer	reviewer	code_reviewer
+
+# Usage is attached once to its associated terminal generated item. Thread
+# totals remain a separate usage row and do not add 303/40 to a response.
+query IIIIIII
+SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, usage_scope, usage_source_line
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-answer-a';
+----
+101	17	3	7	11	response	8
+
+query IIIIIII
+SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, usage_scope, usage_source_line
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-answer-b';
+----
+202	23	0	9	13	response	15
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE usage_scope = 'thread_total' AND input_tokens = 303 AND output_tokens = 40;
+----
+1
+
+# A response receipt without a matching generated item remains a standalone
+# receipt. It must not overwrite the preceding completed response.
+query TTTTTTT
+SELECT message_type, response_id, turn_id, input_tokens, output_tokens, reasoning_tokens, usage_scope
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE response_id = 'resp-unmatched';
+----
+token_usage	resp-unmatched	turn-unmatched	999	88	55	response
+
+query III
+SELECT input_tokens, output_tokens, reasoning_tokens
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-answer-b';
+----
+202	23	13
+
+# Compaction, realtime segments, and history references are retained as rows
+# with raw source JSON and provenance. They must not replay parent records.
+query II
+SELECT message_type, message_content
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE message_type = 'compaction_summary';
+----
+compaction_summary	Compacted previous context.
+
+query I
+SELECT count(event_type) FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE event_type = 'response.output_text.delta';
+----
+2
+
+query II
+SELECT message_type, parent_session_id
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE message_type = 'paginated_history';
+----
+paginated_history	cli-native-0001
+
+# Terminal completion applies to the matching terminal item rather than tool
+# status or another turn's message.
+query II
+SELECT status, stop_reason
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-desktop-answer' AND event_type = 'response_item';
+----
+interrupted	user_cancelled
+
+query II
+SELECT status, stop_reason
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-answer-b';
+----
+completed	stop
+
+# Native terminal event messages carry their own turn identity and reason. They
+# also enrich only the generated terminal item in that turn, preserving a
+# failed tool's status. An empty reasoning summary is SQL NULL while its
+# encrypted source remains in metadata.
+query III
+SELECT turn_id, status, stop_reason
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE event_type = 'event_msg' AND message_type = 'turn_aborted';
+----
+turn-cli-aborted	interrupted	interrupted
+
+query III
+SELECT turn_id, status, stop_reason
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-answer-aborted';
+----
+turn-cli-aborted	interrupted	interrupted
+
+query I
+SELECT status FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-tool-aborted';
+----
+failed
+
+query III
+SELECT turn_id, status, stop_reason
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE event_type = 'event_msg' AND message_type = 'task_complete';
+----
+turn-cli-complete	completed	completed
+
+query II
+SELECT message_content IS NULL, metadata LIKE '%encrypted-reasoning-payload%'
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-cli-reasoning-empty';
+----
+true	true
+
+query II
+SELECT message_content IS NULL, metadata LIKE '%desktop-encrypted-reasoning-payload%'
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-desktop-reasoning-empty';
+----
+true	true
+
+# Desktop writes item_completed inside event_msg. A canonical response_item is
+# enriched rather than repeated, while embedded UI-only message and MCP items
+# retain their native ids, turn context, channel, arguments, output, and status.
+query IIIIIIII
+SELECT uuid, message_type, message_role, message_content, turn_id, event_type, status, channel
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid IN ('item-desktop-answer', 'item-desktop-event-user')
+  AND event_type IN ('response_item', 'event_msg')
+ORDER BY uuid;
+----
+item-desktop-answer	assistant	assistant	Opening the workspace.	turn-desktop	response_item	interrupted	NULL
+item-desktop-event-user	user	user	Inspect the Desktop item.	turn-desktop	event_msg	NULL	analysis
+
+query IIIIIIII
+SELECT uuid, message_type, message_role, tool_name, tool_use_id, tool_input, message_content, status
+FROM read_conversations(path='test/data_codex_regression', source='codex')
+WHERE uuid = 'item-desktop-mcp';
+----
+item-desktop-mcp	mcp_tool_call	tool	read_file	item-desktop-mcp	{"path":"README.md"}	access denied	failed
+
+# The new columns are available to all providers, retaining the 29 legacy
+# columns in their original order and appending this exact Codex fidelity set.
+query I
+SELECT COUNT(*) FROM (
+  DESCRIBE SELECT * FROM read_conversations(path='test/data_codex_regression', source='codex') LIMIT 0
+) WHERE column_name IN (
+  'record_id','file_path','byte_offset','ordinal','event_type','client','originator','thread_source',
+  'parent_session_id','forked_from_session_id','turn_id','root_turn_id','response_id','model_provider',
+  'git_commit','agent_path','agent_nickname','agent_role','channel','status','session_created_at',
+  'session_updated_at','archived','usage_scope','usage_source_line','parse_error','raw_event','metadata'
+);
+----
+28
+
+# read_events shares discovery and physical-record provenance. It exposes the
+# archived transcript only when the same option is enabled.
+query I
+SELECT COUNT(*) FROM read_events(path='test/data_codex_regression', source='codex', include_archived=true)
+WHERE session_id = 'archived-native-0004';
+----
+3

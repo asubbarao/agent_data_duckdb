@@ -23,7 +23,8 @@ impl Todos {
         let mut rows = Vec::new();
 
         for (session_id, agent_id, file_path) in files {
-            let fname = file_path.file_name()
+            let fname = file_path
+                .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
 
@@ -77,7 +78,10 @@ impl Todos {
             let mut item_index: i64 = 0;
             for line in content.lines() {
                 let trimmed = line.trim();
-                if let Some(rest) = trimmed.strip_prefix("- [x] ").or_else(|| trimmed.strip_prefix("- [X] ")) {
+                if let Some(rest) = trimmed
+                    .strip_prefix("- [x] ")
+                    .or_else(|| trimmed.strip_prefix("- [X] "))
+                {
                     rows.push(TodoRow {
                         source: "copilot".to_string(),
                         session_id: session_id.clone(),

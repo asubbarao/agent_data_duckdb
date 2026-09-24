@@ -1,0 +1,24 @@
+# name: test/sql/codex_turn_dedup.test
+# description: an unmatched repeated message in a later turn remains visible
+# group: [agent_data]
+
+require agent_data
+
+query III
+SELECT message_content, model, turn_id
+FROM read_conversations(path='test/data_codex_turn_dedup', source='codex')
+WHERE message_type='user'
+ORDER BY line_number;
+----
+same words	model-a	turn-a
+same words	model-b	turn-b
+event arrives before canonical	model-c	turn-c
+
+# A fallback event can precede its canonical response_item. It is still the
+# same turn and must be replaced rather than emitted as a second user message.
+query III
+SELECT COUNT(*), COUNT(uuid), MAX(uuid)
+FROM read_conversations(path='test/data_codex_turn_dedup', source='codex')
+WHERE message_content = 'event arrives before canonical';
+----
+1	1	canonical-event-first

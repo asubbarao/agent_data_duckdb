@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-09-22T08:00:00Z","payload":{"id":"sqlite-parent-0001","cwd":"/work/sqlite","cli_version":"0.55.0","model_provider":"session-provider","originator":"Codex CLI","source":{"thread_source":"cli"}}}
+{"type":"turn_context","timestamp":"2026-09-22T08:01:00Z","payload":{"turn_id":"turn-historical","root_turn_id":"root-historical","response_id":"response-historical","model":"gpt-historical","reasoning_effort":"low"}}
+{"type":"response_item","timestamp":"2026-09-22T08:02:00Z","payload":{"type":"message","id":"historical-user","role":"user","content":[{"type":"input_text","text":"Historical request."}]}}
+{"type":"response_item","timestamp":"2026-09-22T08:03:00Z","payload":{"type":"message","id":"historical-answer","role":"assistant","content":[{"type":"output_text","text":"Historical answer."}]}}
+{"type":"turn_context","timestamp":"2026-09-22T08:04:00Z","payload":{"turn_id":"turn-current","root_turn_id":"root-current","response_id":"response-current","model":"gpt-current","reasoning_effort":"high"}}
+{"type":"response_item","timestamp":"2026-09-22T08:05:00Z","payload":{"type":"message","id":"current-answer","role":"assistant","content":[{"type":"output_text","text":"Current answer."}]}}

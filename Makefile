@@ -17,6 +17,14 @@ all: configure debug
 include extension-ci-tools/makefiles/c_api_extensions/base.Makefile
 include extension-ci-tools/makefiles/c_api_extensions/rust.Makefile
 
+# The Rust helper only selects Cargo targets for macOS. Distribution builds for
+# the MinGW artifact must emit a GNU DLL rather than the Windows host target.
+ifeq ($(DUCKDB_PLATFORM),windows_amd64_mingw)
+  TARGET = x86_64-pc-windows-gnu
+  TARGET_INFO = --target $(TARGET)
+  TARGET_PATH = ./target/$(TARGET)
+endif
+
 ifeq ($(TARGET_DUCKDB_VERSION),__AGENT_DATA_AUTO__)
   EFFECTIVE_DUCKDB_GIT_VERSION = $(if $(DUCKDB_GIT_VERSION),$(DUCKDB_GIT_VERSION),$(shell cat configure/duckdb_git_version.txt 2>/dev/null))
   RESOLVE_DUCKDB_METADATA_VERSION = scripts/duckdb_metadata_version.py --duckdb-git-version "$(EFFECTIVE_DUCKDB_GIT_VERSION)" --default "$(DEFAULT_TARGET_DUCKDB_VERSION)"

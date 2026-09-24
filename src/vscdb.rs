@@ -77,7 +77,11 @@ impl VscDb {
 
         // Page size: big-endian u16 at offset 16; the literal value 1 means 65536.
         let raw_page_size = u16::from_be_bytes([data[16], data[17]]) as usize;
-        let page_size = if raw_page_size == 1 { 65536 } else { raw_page_size };
+        let page_size = if raw_page_size == 1 {
+            65536
+        } else {
+            raw_page_size
+        };
         if page_size < 512 || !page_size.is_power_of_two() {
             return None;
         }
@@ -579,7 +583,11 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_slice(&big.value).expect("large value is valid JSON");
         let text = v["text"].as_str().expect("text field");
-        assert_eq!(text.len(), 100_000, "overflow payload reassembled to full length");
+        assert_eq!(
+            text.len(),
+            100_000,
+            "overflow payload reassembled to full length"
+        );
         assert!(text.starts_with("0123456789ABCDEF"));
         assert!(text.ends_with("0123456789ABCDEF"));
     }

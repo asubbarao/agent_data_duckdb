@@ -10,7 +10,7 @@ require agent_data
 # ============================================================
 # Row counts
 # user + custom_tool_call + custom_tool_call_output + custom_tool_call +
-# custom_tool_call_output + agent_message + assistant = 7.
+# custom_tool_call_output + agent_message + assistant + cumulative total = 8.
 # The event_msg/agent_message duplicate of the closing assistant turn is
 # suppressed because the session already has response_item/message rows.
 # ============================================================
@@ -18,7 +18,7 @@ require agent_data
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity');
 ----
-7
+8
 
 query II
 SELECT message_type, COUNT(*) AS cnt FROM read_conversations(path='test/data_codex_fidelity')
@@ -28,6 +28,7 @@ agent_message	1
 assistant	1
 custom_tool_call	2
 custom_tool_call_output	2
+token_usage_total	1
 user	1
 
 # ============================================================

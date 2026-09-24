@@ -1,0 +1,3 @@
+{"type":"session_meta","timestamp":"2026-04-30T08:00:00Z","payload":{"id":"archived-native-0004","cwd":"/archive/project","originator":"Codex CLI","source":"cli","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-04-30T08:00:01Z","payload":{"turn_id":"turn-archived","model":"gpt-5.3-codex","cwd":"/archive/project"}}
+{"type":"response_item","timestamp":"2026-04-30T08:00:02Z","payload":{"id":"item-archived","type":"message","role":"assistant","content":[{"type":"output_text","text":"This archived transcript must be opt-in."}]}}

@@ -1,3 +1,5 @@
+pub mod codex_discovery;
+pub mod codex_index;
 mod conversations;
 mod detect;
 mod events;

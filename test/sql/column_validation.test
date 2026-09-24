@@ -289,7 +289,7 @@ cursor	2
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_codex') GROUP BY source ORDER BY source;
 ----
-codex	5
+codex	6
 
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_gemini') GROUP BY source ORDER BY source;
@@ -389,4 +389,3 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
 WHERE reasoning_effort IS NOT NULL;
 ----
 0
-

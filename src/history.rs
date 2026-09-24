@@ -26,32 +26,38 @@ impl History {
             Err(_) => return Vec::new(),
         };
 
-        BufReader::new(file).lines().enumerate().filter_map(|(line_idx, line_result)| {
-            let line = line_result.ok()?;
-            if line.trim().is_empty() { return None; }
+        BufReader::new(file)
+            .lines()
+            .enumerate()
+            .filter_map(|(line_idx, line_result)| {
+                let line = line_result.ok()?;
+                if line.trim().is_empty() {
+                    return None;
+                }
 
-            let line_number = (line_idx + 1) as i64;
-            Some(match serde_json::from_str::<HistoryEntry>(&line) {
-                Ok(entry) => HistoryRow {
-                    source: "claude".to_string(),
-                    line_number,
-                    timestamp_ms: entry.timestamp.map(|t| t as i64),
-                    project: entry.project,
-                    session_id: entry.session_id,
-                    display: entry.display,
-                    pasted_contents: entry.pasted_contents.map(|v| v.to_string()),
-                },
-                Err(e) => HistoryRow {
-                    source: "claude".to_string(),
-                    line_number,
-                    timestamp_ms: None,
-                    project: None,
-                    session_id: None,
-                    display: Some(format!("Parse error: {}", e)),
-                    pasted_contents: None,
-                },
+                let line_number = (line_idx + 1) as i64;
+                Some(match serde_json::from_str::<HistoryEntry>(&line) {
+                    Ok(entry) => HistoryRow {
+                        source: "claude".to_string(),
+                        line_number,
+                        timestamp_ms: entry.timestamp.map(|t| t as i64),
+                        project: entry.project,
+                        session_id: entry.session_id,
+                        display: entry.display,
+                        pasted_contents: entry.pasted_contents.map(|v| v.to_string()),
+                    },
+                    Err(e) => HistoryRow {
+                        source: "claude".to_string(),
+                        line_number,
+                        timestamp_ms: None,
+                        project: None,
+                        session_id: None,
+                        display: Some(format!("Parse error: {}", e)),
+                        pasted_contents: None,
+                    },
+                })
             })
-        }).collect()
+            .collect()
     }
 
     fn load_copilot_rows(base_path: &std::path::Path) -> Vec<HistoryRow> {
@@ -65,8 +71,11 @@ impl History {
             Err(_) => return Vec::new(),
         };
 
-        history.command_history.into_iter().enumerate().map(|(idx, cmd)| {
-            HistoryRow {
+        history
+            .command_history
+            .into_iter()
+            .enumerate()
+            .map(|(idx, cmd)| HistoryRow {
                 source: "copilot".to_string(),
                 line_number: (idx + 1) as i64,
                 timestamp_ms: None,
@@ -74,8 +83,8 @@ impl History {
                 session_id: None,
                 display: Some(cmd),
                 pasted_contents: None,
-            }
-        }).collect()
+            })
+            .collect()
     }
 }
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// If no path, default to ~/.claude (legacy default).
 pub fn resolve_data_path(path: Option<&str>) -> PathBuf {
     match path {
-        Some(p) => expand_tilde(p),
+        Some(p) => expand_user_path(p),
         None => {
             let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
             home.join(".claude")
@@ -14,7 +14,7 @@ pub fn resolve_data_path(path: Option<&str>) -> PathBuf {
 }
 
 /// Expand ~ at the start of a path to the user's home directory.
-fn expand_tilde(path: &str) -> PathBuf {
+pub fn expand_user_path(path: &str) -> PathBuf {
     if path.starts_with("~/") || path == "~" {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         if path == "~" {
@@ -63,11 +63,7 @@ fn discover_project_jsonl_files(projects_dir: &Path) -> Vec<(String, bool, PathB
             .into_iter()
             .flatten()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map_or(false, |ext| ext == "jsonl")
-            })
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
             .collect();
         jsonl_files.sort_by_key(|e| e.file_name());
 
@@ -111,11 +107,7 @@ fn discover_subagent_files(project_dir: &Path) -> Vec<PathBuf> {
             .into_iter()
             .flatten()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map_or(false, |ext| ext == "jsonl")
-            })
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
             .collect();
         jsonl_files.sort_by_key(|e| e.file_name());
 
@@ -240,11 +232,7 @@ pub fn discover_plan_files(base_path: &Path) -> Vec<PathBuf> {
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |ext| ext == "md")
-        })
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
         .collect();
     files.sort_by_key(|e| e.file_name());
 
@@ -268,11 +256,7 @@ pub fn discover_todo_files(base_path: &Path) -> Vec<(String, String, PathBuf)> {
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |ext| ext == "json")
-        })
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
         .collect();
     files.sort_by_key(|e| e.file_name());
 
@@ -465,50 +449,6 @@ pub fn epoch_secs_to_iso(secs: i64) -> String {
     epoch_ms_to_iso(secs.saturating_mul(1000))
 }
 
-// ─── Codex Discovery Functions ───
-
-/// Discover Codex rollout-*.jsonl transcripts under sessions/YYYY/MM/DD/.
-/// Returns (session_uuid, file_path) tuples sorted by path.
-pub fn discover_codex_rollout_files(base_path: &Path) -> Vec<(String, PathBuf)> {
-    let sessions_dir = base_path.join("sessions");
-    let mut results = Vec::new();
-    if !sessions_dir.is_dir() {
-        return results;
-    }
-    walk_codex(&sessions_dir, &mut results);
-    results.sort_by(|a, b| a.1.cmp(&b.1));
-    results
-}
-
-fn walk_codex(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk_codex(&path, out);
-        } else {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("rollout-") && name.ends_with(".jsonl") {
-                // session uuid is the trailing UUID (5 hyphen-delimited groups)
-                // before `.jsonl`.
-                let stem = name.strip_suffix(".jsonl").unwrap_or(&name);
-                let session_uuid = stem
-                    .rsplit('-')
-                    .take(5)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("-");
-                out.push((session_uuid, path));
-            }
-        }
-    }
-}
-
 // ─── Gemini Discovery Functions ───
 
 /// Discover all Gemini CLI chat session files.
@@ -679,12 +619,10 @@ pub fn discover_grok_subagent_parents(
                 };
                 let parent = meta
                     .parent_session_id
-                    .or_else(|| {
-                        Some(parent_entry.file_name().to_string_lossy().to_string())
-                    });
-                let child = meta.child_session_id.or_else(|| {
-                    Some(child_entry.file_name().to_string_lossy().to_string())
-                });
+                    .or_else(|| Some(parent_entry.file_name().to_string_lossy().to_string()));
+                let child = meta
+                    .child_session_id
+                    .or_else(|| Some(child_entry.file_name().to_string_lossy().to_string()));
                 if let (Some(p), Some(c)) = (parent, child) {
                     map.insert(c, p);
                 }
@@ -705,9 +643,7 @@ pub fn read_grok_summary(session_dir: &Path) -> Option<crate::types::grok::GrokS
 /// Returns `None` if the file is missing, unreadable, or has no usable usage block.
 /// Callers stamp this onto conversation rows as a session/prompt aggregate (not
 /// per-message); see README Grok field map.
-pub fn read_grok_last_turn_usage(
-    session_dir: &Path,
-) -> Option<crate::types::grok::GrokUsage> {
+pub fn read_grok_last_turn_usage(session_dir: &Path) -> Option<crate::types::grok::GrokUsage> {
     use crate::types::grok::{GrokUpdatesLine, GrokUsage};
     use std::io::{BufRead, BufReader};
 
@@ -743,9 +679,7 @@ pub fn read_grok_last_turn_usage(
 /// Skips noise (hooks, memory flushes). Used to fill `ConversationRow.timestamp`
 /// so Grok rows look like Claude (ISO string per message) even though
 /// chat_history.jsonl has no time fields.
-pub fn read_grok_update_timeline(
-    session_dir: &Path,
-) -> Vec<crate::types::grok::GrokTimedEvent> {
+pub fn read_grok_update_timeline(session_dir: &Path) -> Vec<crate::types::grok::GrokTimedEvent> {
     use crate::types::grok::{GrokTimedEvent, GrokUpdatesLine};
     use std::io::{BufRead, BufReader};
 

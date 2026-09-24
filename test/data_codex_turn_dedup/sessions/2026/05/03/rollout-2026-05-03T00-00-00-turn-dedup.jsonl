@@ -1,0 +1,8 @@
+{"type":"session_meta","timestamp":"2026-05-03T00:00:00Z","payload":{"id":"turn-dedup-native","originator":"Codex CLI"}}
+{"type":"turn_context","timestamp":"2026-05-03T00:00:01Z","payload":{"turn_id":"turn-a","model":"model-a"}}
+{"type":"response_item","timestamp":"2026-05-03T00:00:02Z","payload":{"type":"message","role":"user","id":"first-user","content":[{"type":"input_text","text":"same words"}]}}
+{"type":"turn_context","timestamp":"2026-05-03T00:01:00Z","payload":{"turn_id":"turn-b","model":"model-b"}}
+{"type":"event_msg","timestamp":"2026-05-03T00:01:01Z","payload":{"type":"user_message","message":"same words"}}
+{"type":"turn_context","timestamp":"2026-05-03T00:02:00Z","payload":{"turn_id":"turn-c","model":"model-c"}}
+{"type":"event_msg","timestamp":"2026-05-03T00:02:01Z","payload":{"type":"user_message","message":"event arrives before canonical"}}
+{"type":"response_item","timestamp":"2026-05-03T00:02:02Z","payload":{"type":"message","role":"user","id":"canonical-event-first","content":[{"type":"input_text","text":"event arrives before canonical"}]}}
