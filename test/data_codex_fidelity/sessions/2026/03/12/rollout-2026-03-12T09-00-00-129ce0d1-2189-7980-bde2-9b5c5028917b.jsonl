@@ -9,3 +9,11 @@
 {"type":"response_item","timestamp":"2026-03-12T09:00:08.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Patched hello.py and confirmed a clean status."}]}}
 {"type":"event_msg","timestamp":"2026-03-12T09:00:08.500Z","payload":{"type":"agent_message","message":"Patched hello.py and confirmed a clean status."}}
 {"type":"event_msg","timestamp":"2026-03-12T09:00:09.000Z","payload":{"type":"token_count","info":{"total_tokens":987}}}
+{"type":"turn_context","timestamp":"2026-03-12T09:00:10.000Z","payload":{"turn_id":"turn-native-mirror-a"}}
+{"type":"event_msg","timestamp":"2026-03-12T09:00:11.000Z","payload":{"type":"item_completed","turn_id":"turn-native-mirror-a","item":{"type":"AgentMessage","id":"native-agent-message-a","content":[{"type":"output_text","text":"Repeated assistant text."}],"phase":"completed"}}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:12.000Z","payload":{"type":"message","id":"native-agent-message-a","role":"assistant","turn_id":"turn-native-mirror-a","content":[{"type":"output_text","text":"Repeated assistant text."}]}}
+{"type":"turn_context","timestamp":"2026-03-12T09:00:13.000Z","payload":{"turn_id":"turn-native-mirror-b"}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:14.000Z","payload":{"type":"message","id":"native-agent-message-b","role":"assistant","turn_id":"turn-native-mirror-b","content":[{"type":"output_text","text":"Repeated assistant text."}]}}
+{"type":"turn_context","timestamp":"2026-03-12T09:00:15.000Z","payload":{"turn_id":"turn-native-agent-message"}}
+{"type":"event_msg","timestamp":"2026-03-12T09:00:16.000Z","payload":{"type":"item_completed","turn_id":"turn-native-agent-message","item":{"type":"AgentMessage","id":"native-agent-message-c","content":[{"type":"output_text","text":"Canonical agent-message item."}],"phase":"completed"}}}
+{"type":"response_item","timestamp":"2026-03-12T09:00:17.000Z","payload":{"type":"agent_message","id":"native-agent-message-c","turn_id":"turn-native-agent-message","content":[{"type":"output_text","text":"Canonical agent-message item."}]}}

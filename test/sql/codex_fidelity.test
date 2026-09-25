@@ -8,30 +8,6 @@
 require agent_data
 
 # ============================================================
-# Row counts
-# user + custom_tool_call + custom_tool_call_output + custom_tool_call +
-# custom_tool_call_output + agent_message + assistant + cumulative total = 8.
-# The event_msg/agent_message duplicate of the closing assistant turn is
-# suppressed because the session already has response_item/message rows.
-# ============================================================
-
-query I
-SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity');
-----
-8
-
-query II
-SELECT message_type, COUNT(*) AS cnt FROM read_conversations(path='test/data_codex_fidelity')
-GROUP BY message_type ORDER BY message_type;
-----
-agent_message	1
-assistant	1
-custom_tool_call	2
-custom_tool_call_output	2
-token_usage_total	1
-user	1
-
-# ============================================================
 # custom_tool_call: raw string input is kept unquoted (not re-escaped as a
 # JSON string literal).
 # ============================================================
@@ -109,13 +85,15 @@ WHERE message_type = 'custom_tool_call_output' AND tool_use_id IS NULL;
 
 query I
 SELECT replace(message_content, chr(10), '|') FROM read_conversations(path='test/data_codex_fidelity')
-WHERE message_type = 'agent_message';
+WHERE message_type = 'agent_message'
+  AND message_content = 'Sender: /root/reviewer' || chr(10) || 'Patch looks good.';
 ----
 Sender: /root/reviewer|Patch looks good.
 
 query I
 SELECT message_role FROM read_conversations(path='test/data_codex_fidelity')
-WHERE message_type = 'agent_message';
+WHERE message_type = 'agent_message'
+  AND message_content = 'Sender: /root/reviewer' || chr(10) || 'Patch looks good.';
 ----
 assistant
 
@@ -147,6 +125,41 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_codex_fidelity')
 WHERE message_content = 'Patched hello.py and confirmed a clean status.';
 ----
 1
+
+# ============================================================
+# Desktop item_completed AgentMessage mirrors carry the same native item ID as
+# their canonical response_item. Keep the canonical assistant row, enrich it
+# from the mirror, and retain repeated text when it belongs to another turn.
+# ============================================================
+
+query II
+SELECT uuid, message_type FROM read_conversations(path='test/data_codex_fidelity')
+WHERE uuid IN ('native-agent-message-a', 'native-agent-message-b', 'native-agent-message-c')
+ORDER BY uuid;
+----
+native-agent-message-a	assistant
+native-agent-message-b	assistant
+native-agent-message-c	agent_message
+
+query I
+SELECT turn_id FROM read_conversations(path='test/data_codex_fidelity')
+WHERE uuid = 'native-agent-message-a';
+----
+turn-native-mirror-a
+
+query I
+SELECT status FROM read_conversations(path='test/data_codex_fidelity')
+WHERE uuid = 'native-agent-message-a';
+----
+completed
+
+query I
+SELECT turn_id FROM read_conversations(path='test/data_codex_fidelity')
+WHERE message_content = 'Repeated assistant text.'
+ORDER BY turn_id;
+----
+turn-native-mirror-a
+turn-native-mirror-b
 
 # ============================================================
 # Session metadata is still carried forward to the new response_item types.

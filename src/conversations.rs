@@ -1019,10 +1019,10 @@ impl Conversations {
                     if parsed.line_type == "response_item"
                         && matches!(
                             row.message_type.as_str(),
-                            "user" | "assistant" | "developer"
+                            "user" | "assistant" | "developer" | "agent_message"
                         )
                     {
-                        Self::suppress_prior_codex_event_copy(&mut rows, &row);
+                        Self::suppress_prior_codex_event_copy(&mut rows, &mut row);
                         *canonical_messages
                             .entry((
                                 row.message_role.clone().unwrap_or_default(),
@@ -1706,24 +1706,48 @@ impl Conversations {
         lines
     }
 
-    fn suppress_prior_codex_event_copy(rows: &mut [ConversationRow], canonical: &ConversationRow) {
+    fn suppress_prior_codex_event_copy(
+        rows: &mut [ConversationRow],
+        canonical: &mut ConversationRow,
+    ) {
         let Some(turn_id) = canonical.turn_id.as_deref() else {
             return;
         };
-        let Some(role) = canonical.message_role.as_deref() else {
-            return;
-        };
-        let Some(content) = canonical.message_content.as_deref() else {
-            return;
-        };
+        let canonical_uuid = canonical.uuid.as_deref();
+        let role = canonical.message_role.as_deref();
+        let content = canonical.message_content.as_deref();
         if let Some(event) = rows.iter_mut().rev().find(|row| {
             !row.suppress_output
                 && row.event_type.as_deref() == Some("event_msg")
-                && matches!(row.message_type.as_str(), "user" | "assistant")
+                && matches!(
+                    row.message_type.as_str(),
+                    "user" | "assistant" | "agent_message"
+                )
                 && row.turn_id.as_deref() == Some(turn_id)
-                && row.message_role.as_deref() == Some(role)
-                && row.message_content.as_deref() == Some(content)
+                && match (canonical_uuid, row.uuid.as_deref()) {
+                    (Some(canonical_uuid), Some(event_uuid)) => canonical_uuid == event_uuid,
+                    _ => match (role, content) {
+                        (Some(role), Some(content)) => {
+                            row.message_role.as_deref() == Some(role)
+                                && row.message_content.as_deref() == Some(content)
+                        }
+                        _ => false,
+                    },
+                }
         }) {
+            canonical.parent_uuid = canonical.parent_uuid.clone().or(event.parent_uuid.clone());
+            canonical.response_id = canonical.response_id.clone().or(event.response_id.clone());
+            canonical.root_turn_id = canonical
+                .root_turn_id
+                .clone()
+                .or(event.root_turn_id.clone());
+            canonical.channel = canonical.channel.clone().or(event.channel.clone());
+            canonical.status = canonical.status.clone().or(event.status.clone());
+            canonical.stop_reason = canonical.stop_reason.clone().or(event.stop_reason.clone());
+            canonical.message_content = canonical
+                .message_content
+                .clone()
+                .or(event.message_content.clone());
             event.suppress_output = true;
         }
     }
