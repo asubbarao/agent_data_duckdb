@@ -190,3 +190,19 @@ query I
 SELECT COUNT(*) FROM read_stats(path='test/data_claude_desktop');
 ----
 0
+
+# Claude Desktop uses the shared parser and retains the same physical evidence.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_claude_desktop')
+WHERE NOT (raw_event IS NOT NULL AND file_path IS NOT NULL AND byte_offset IS NOT NULL
+           AND ordinal IS NOT NULL);
+----
+0
+
+# Desktop nested subagents expose the directory parent and child transcript path.
+query II
+SELECT DISTINCT parent_session_id, agent_path
+FROM read_conversations(path='test/data_claude_desktop')
+WHERE file_name = 'agent-desk01.jsonl';
+----
+e1e1e1e1-3333-4333-8333-333333333333	e1e1e1e1-3333-4333-8333-333333333333/subagents/agent-desk01.jsonl

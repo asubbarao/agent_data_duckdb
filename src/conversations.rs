@@ -274,17 +274,23 @@ impl Conversations {
         }
     }
 
-    fn load_claude_rows(base_path: &std::path::Path) -> Vec<ConversationRow> {
+    fn load_claude_rows(
+        base_path: &std::path::Path,
+        retain_raw_event: bool,
+    ) -> Vec<ConversationRow> {
         let files = utils::discover_conversation_files(base_path);
-        Self::load_claude_jsonl_rows("claude", &files)
+        Self::load_claude_jsonl_rows("claude", &files, retain_raw_event)
     }
 
     /// Claude Desktop ("Cowork") stores transcripts using the same camelCase
     /// schema as Claude Code, so this delegates to the shared line-parser; only
     /// the discovered file set and the `source` label differ.
-    fn load_claude_desktop_rows(base_path: &std::path::Path) -> Vec<ConversationRow> {
+    fn load_claude_desktop_rows(
+        base_path: &std::path::Path,
+        retain_raw_event: bool,
+    ) -> Vec<ConversationRow> {
         let files = utils::discover_claude_desktop_files(base_path);
-        Self::load_claude_jsonl_rows("claude-desktop", &files)
+        Self::load_claude_jsonl_rows("claude-desktop", &files, retain_raw_event)
     }
 
     /// Parse a set of discovered Claude-schema JSONL transcript files into rows.
@@ -292,6 +298,7 @@ impl Conversations {
     fn load_claude_jsonl_rows(
         source: &str,
         files: &[(String, bool, std::path::PathBuf)],
+        retain_raw_event: bool,
     ) -> Vec<ConversationRow> {
         let mut rows = Vec::new();
 
@@ -303,19 +310,57 @@ impl Conversations {
             let file_session_id = utils::fallback_session_id(file_path);
 
             let file = match std::fs::File::open(file_path) {
-                Ok(f) => f,
+                Ok(file) => file,
                 Err(_) => continue,
             };
+
+            let (nested_parent_session_id, agent_path) =
+                Self::claude_agent_evidence(file_path, *is_agent);
 
             let file_rows_start = rows.len();
             let mut file_cwd: Option<String> = None;
             let mut file_line: i64 = 0;
 
-            for line_result in BufReader::new(file).lines() {
+            let mut reader = BufReader::new(file);
+            let mut raw_bytes = Vec::new();
+            let mut byte_offset: i64 = 0;
+            loop {
+                raw_bytes.clear();
+                let bytes_read = match reader.read_until(b'\n', &mut raw_bytes) {
+                    Ok(0) => break,
+                    Ok(bytes_read) => bytes_read,
+                    Err(_) => break,
+                };
+                let line_offset = byte_offset;
+                byte_offset += bytes_read as i64;
+                let mut content_end = raw_bytes.len();
+                if raw_bytes.last() == Some(&b'\n') {
+                    content_end -= 1;
+                    if content_end > 0 && raw_bytes[content_end - 1] == b'\r' {
+                        content_end -= 1;
+                    }
+                }
                 file_line += 1;
-                let line = match line_result {
-                    Ok(l) if !l.trim().is_empty() => l,
-                    _ => continue,
+                let line = String::from_utf8_lossy(&raw_bytes[..content_end]).into_owned();
+                if line.trim().is_empty() {
+                    continue;
+                }
+
+                // Read the native sessionId even for an unsupported record.  It
+                // is the only parent evidence available in a flat legacy
+                // agent-*.jsonl transcript; nested agents use their directory.
+                let native_session_id = if *is_agent && nested_parent_session_id.is_none() {
+                    serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("sessionId")
+                                .and_then(|session_id| session_id.as_str())
+                                .filter(|session_id| !session_id.is_empty())
+                                .map(str::to_string)
+                        })
+                } else {
+                    None
                 };
 
                 let row = match serde_json::from_str::<ConversationMessage>(&line) {
@@ -339,9 +384,22 @@ impl Conversations {
                             "_parse_error",
                         );
                         row.message_content = Some(format!("Parse error: {}", e));
+                        row.parse_error = Some(e.to_string());
                         row
                     }
                 };
+
+                let mut row = row;
+                row.file_path = Some(file_path.to_string_lossy().into_owned());
+                row.byte_offset = Some(line_offset);
+                row.ordinal = Some(file_line.saturating_sub(1));
+                if retain_raw_event {
+                    row.raw_event = Some(line.clone());
+                }
+                if *is_agent {
+                    row.parent_session_id = nested_parent_session_id.clone().or(native_session_id);
+                    row.agent_path = agent_path.clone();
+                }
 
                 if file_cwd.is_none() && row.cwd.is_some() {
                     file_cwd = row.cwd.clone();
@@ -359,6 +417,39 @@ impl Conversations {
             }
         }
         rows
+    }
+
+    /// Return the relationship evidence carried by Claude's transcript path.
+    /// Nested child files identify their parent by the session directory; flat
+    /// legacy agent files have no path-derived parent and rely on sessionId.
+    fn claude_agent_evidence(file_path: &Path, is_agent: bool) -> (Option<String>, Option<String>) {
+        if !is_agent {
+            return (None, None);
+        }
+
+        let file_name = file_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let Some(parent_dir) = file_path.parent() else {
+            return (None, Some(file_name));
+        };
+
+        if parent_dir
+            .file_name()
+            .is_some_and(|name| name == "subagents")
+        {
+            let parent_session_id = parent_dir
+                .parent()
+                .and_then(Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned());
+            let agent_path = parent_session_id
+                .as_ref()
+                .map(|session_id| format!("{session_id}/subagents/{file_name}"));
+            (parent_session_id, agent_path)
+        } else {
+            (None, Some(file_name))
+        }
     }
 }
 
@@ -2669,6 +2760,28 @@ impl Conversations {
 
 // ─── TableFunc implementation ───
 
+impl Conversations {
+    fn load_rows_with_options(
+        path: Option<&str>,
+        source: Option<&str>,
+        retain_raw_event: bool,
+    ) -> Vec<ConversationRow> {
+        let base_path = utils::resolve_data_path(path);
+        match detect::resolve_provider(&base_path, source) {
+            Provider::Claude => Self::load_claude_rows(&base_path, retain_raw_event),
+            Provider::ClaudeDesktop => {
+                Self::load_claude_desktop_rows(&base_path, retain_raw_event)
+            }
+            Provider::Copilot => Self::load_copilot_rows(&base_path),
+            Provider::Cursor => Self::load_cursor_rows(&base_path),
+            Provider::Codex => Self::load_codex_rows(path, false, true, true).unwrap_or_default(),
+            Provider::Gemini => Self::load_gemini_rows(&base_path),
+            Provider::Grok => Self::load_grok_rows(&base_path),
+            Provider::Unknown => Vec::new(),
+        }
+    }
+}
+
 impl TableFunc for Conversations {
     type Row = ConversationRow;
 
@@ -2735,17 +2848,7 @@ impl TableFunc for Conversations {
     }
 
     fn load_rows(path: Option<&str>, source: Option<&str>) -> Vec<ConversationRow> {
-        let base_path = utils::resolve_data_path(path);
-        match detect::resolve_provider(&base_path, source) {
-            Provider::Claude => Self::load_claude_rows(&base_path),
-            Provider::ClaudeDesktop => Self::load_claude_desktop_rows(&base_path),
-            Provider::Copilot => Self::load_copilot_rows(&base_path),
-            Provider::Cursor => Self::load_cursor_rows(&base_path),
-            Provider::Codex => Self::load_codex_rows(path, false, true, true).unwrap_or_default(),
-            Provider::Gemini => Self::load_gemini_rows(&base_path),
-            Provider::Grok => Self::load_grok_rows(&base_path),
-            Provider::Unknown => Vec::new(),
-        }
+        Self::load_rows_with_options(path, source, true)
     }
 
     fn supports_include_archived() -> bool {
@@ -2782,7 +2885,11 @@ impl TableFunc for Conversations {
                 projected_columns.contains(&55),
                 projected_columns.contains(&56),
             ),
-            _ => Ok(Self::load_rows(path, source)),
+            _ => Ok(Self::load_rows_with_options(
+                path,
+                source,
+                projected_columns.contains(&55),
+            )),
         }
     }
 
@@ -3051,5 +3158,71 @@ mod codex_completion_tests {
             Conversations::codex_call_id(&value).as_deref(),
             Some("call-1")
         );
+    }
+}
+
+#[cfg(test)]
+mod claude_projection_tests {
+    use super::*;
+
+    fn fixture_path() -> String {
+        std::env::current_dir()
+            .unwrap()
+            .join("test/data_claude_evidence")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn claude_projection_controls_raw_event_retention_only() {
+        let path = fixture_path();
+        let no_raw = Conversations::try_load_rows_with_projection(
+            Some(&path),
+            Some("claude"),
+            true,
+            &[1],
+        )
+        .unwrap();
+        assert!(no_raw.iter().all(|row| row.raw_event.is_none()));
+
+        let parse_error = no_raw
+            .iter()
+            .find(|row| row.message_type == "_parse_error")
+            .unwrap();
+        assert!(parse_error.file_path.is_some());
+        assert!(parse_error.parse_error.is_some());
+        let child = no_raw
+            .iter()
+            .find(|row| row.file_name == "agent-child01.jsonl")
+            .unwrap();
+        assert_eq!(
+            child.parent_session_id.as_deref(),
+            Some("eeeeeeee-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            child.agent_path.as_deref(),
+            Some("eeeeeeee-1111-4111-8111-111111111111/subagents/agent-child01.jsonl")
+        );
+
+        let expected = r#"{"type":"user","uuid":"root-user","sessionId":"eeeeeeee-1111-4111-8111-111111111111","cwd":"/Users/testuser/project-evidence","message":{"role":"user","content":"root"}}"#;
+        let raw_projection = Conversations::try_load_rows_with_projection(
+            Some(&path),
+            Some("claude"),
+            true,
+            &[55],
+        )
+        .unwrap();
+        let projected_user = raw_projection
+            .iter()
+            .find(|row| row.uuid.as_deref() == Some("root-user"))
+            .unwrap();
+        assert_eq!(projected_user.raw_event.as_deref(), Some(expected));
+
+        let full = Conversations::load_rows(Some(&path), Some("claude"));
+        let full_user = full
+            .iter()
+            .find(|row| row.uuid.as_deref() == Some("root-user"))
+            .unwrap();
+        assert_eq!(full_user.raw_event.as_deref(), Some(expected));
     }
 }

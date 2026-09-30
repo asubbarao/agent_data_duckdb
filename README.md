@@ -186,6 +186,28 @@ Reads conversation/event data.
 | `stop_reason` | VARCHAR | Claude API stop reason (NULL for Grok) |
 | `reasoning_effort` | VARCHAR | Grok-only: per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other sources |
 | `repository` | VARCHAR | GitHub repository (Copilot; Grok from `summary.git_remotes[0]`) |
+| `record_id` | VARCHAR | Provider record identifier when available |
+| `file_path` | VARCHAR | Transcript file path for the physical source line (Claude, Codex) |
+| `byte_offset` | BIGINT | Byte offset of the physical source line (Claude, Codex) |
+| `ordinal` | BIGINT | Zero-based physical line ordinal (Claude, Codex) |
+| `parent_session_id` | VARCHAR | Parent session relationship when the source provides one |
+| `agent_path` | VARCHAR | Structured child-agent path; Claude uses the nested transcript path or flat agent filename |
+| `parse_error` | VARCHAR | Parser diagnostic for a retained unsupported or malformed source record |
+| `raw_event` | VARCHAR | Exact valid UTF-8 JSONL line text without its terminator (Claude, Codex) |
+
+Claude and Claude Desktop retain `file_path`, `byte_offset`, and `ordinal` on
+every non-blank JSONL row, including unsupported and malformed records. For
+valid UTF-8 lines, `raw_event` is the exact line text without its terminator;
+invalid UTF-8 fidelity is available from `read_events()` via `raw_bytes`,
+addressed by `file_path` and `byte_offset`. Such rows use
+`message_type = '_parse_error'` and carry the parser diagnostic in
+`parse_error`. Full reads and projections that select `raw_event` populate
+that field; projections that omit it avoid retaining the line text while
+preserving the other evidence fields. Nested Claude subagents derive
+`parent_session_id` from `projects/<project>/<parent>/subagents/`; their
+`agent_path` is `<parent>/subagents/agent-*.jsonl`. Flat legacy `agent-*.jsonl`
+files use an explicit `sessionId` as `parent_session_id` when present and leave
+it NULL otherwise. `session_id` keeps its existing file/native behavior.
 
 **Message type mappings:**
 
