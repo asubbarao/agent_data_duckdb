@@ -10,16 +10,17 @@ SELECT count(session_id) FROM read_conversations(path='test/data_claude_evidence
 ----
 7
 
-# Unknown and malformed physical records are retained as rows with diagnostics.
+# Unknown valid and malformed physical records are retained as rows; only the
+# malformed record carries a parse diagnostic.
 query IIII
 SELECT message_type, parse_error IS NOT NULL, raw_event, file_name
 FROM read_conversations(path='test/data_claude_evidence')
 WHERE file_name = 'eeeeeeee-1111-4111-8111-111111111111.jsonl'
-  AND message_type = '_parse_error'
+  AND line_number IN (2, 4)
 ORDER BY line_number;
 ----
-_parse_error	true	{"type":"future-record","sessionId":"eeeeeeee-1111-4111-8111-111111111111","payload":{"keep":[1,"two"]}}	eeeeeeee-1111-4111-8111-111111111111.jsonl
-_parse_error	true	{not-json}	eeeeeeee-1111-4111-8111-111111111111.jsonl
+future-record	0	{"type":"future-record","sessionId":"eeeeeeee-1111-4111-8111-111111111111","payload":{"keep":[1,"two"]}}	eeeeeeee-1111-4111-8111-111111111111.jsonl
+_parse_error	1	{not-json}	eeeeeeee-1111-4111-8111-111111111111.jsonl
 
 # Every returned row carries the exact non-terminator line, path, and physical address.
 query I

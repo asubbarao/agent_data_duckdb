@@ -19,6 +19,25 @@ pub enum ConversationMessage {
     Summary(SummaryMessage),
 }
 
+/// Claude adds transcript record types independently of this reader. Keep the
+/// typed parsing for records we understand, but retain any valid object with a
+/// string `type` as an ordinary record instead of turning it into a parse
+/// error.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum ConversationRecord {
+    Known(ConversationMessage),
+    Unknown(UnknownMessage),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UnknownMessage {
+    #[serde(rename = "type")]
+    pub record_type: String,
+    #[serde(flatten)]
+    pub base: BaseFields,
+}
+
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct BaseFields {
