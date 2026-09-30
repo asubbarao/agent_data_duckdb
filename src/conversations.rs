@@ -274,6 +274,27 @@ impl Conversations {
         }
     }
 
+    fn claude_unknown_to_row(
+        source: &str,
+        msg: UnknownMessage,
+        project_dir: &str,
+        file_name: &str,
+        is_agent: bool,
+        file_session_id: &str,
+        line_number: i64,
+    ) -> ConversationRow {
+        Self::claude_base_row(
+            source,
+            &msg.base,
+            project_dir,
+            file_name,
+            is_agent,
+            file_session_id,
+            line_number,
+            &msg.record_type,
+        )
+    }
+
     fn load_claude_rows(
         base_path: &std::path::Path,
         retain_raw_event: bool,
@@ -363,8 +384,17 @@ impl Conversations {
                     None
                 };
 
-                let row = match serde_json::from_str::<ConversationMessage>(&line) {
-                    Ok(msg) => Self::claude_message_to_row(
+                let row = match serde_json::from_str::<ConversationRecord>(&line) {
+                    Ok(ConversationRecord::Known(msg)) => Self::claude_message_to_row(
+                        source,
+                        msg,
+                        project_dir,
+                        &file_name,
+                        *is_agent,
+                        &file_session_id,
+                        file_line,
+                    ),
+                    Ok(ConversationRecord::Unknown(msg)) => Self::claude_unknown_to_row(
                         source,
                         msg,
                         project_dir,
