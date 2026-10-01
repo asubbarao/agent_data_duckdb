@@ -31,6 +31,9 @@ pub fn expand_user_path(path: &str) -> PathBuf {
 /// Returns (project_dir_encoded, is_agent, file_path) tuples sorted deterministically.
 /// project_dir_encoded is the raw folder name (e.g., "-Users-testuser-project-alpha").
 pub fn discover_conversation_files(base_path: &Path) -> Vec<(String, bool, PathBuf)> {
+    if let Some(file) = explicit_claude_transcript(base_path) {
+        return vec![file];
+    }
     let projects_dir = base_path.join("projects");
     discover_project_jsonl_files(&projects_dir)
 }
@@ -128,6 +131,9 @@ fn discover_subagent_files(project_dir: &Path) -> Vec<PathBuf> {
 /// shared `discover_project_jsonl_files` walk so the subagent fix applies here too.
 /// Returns (project_dir_encoded, is_agent, file_path) tuples sorted deterministically.
 pub fn discover_claude_desktop_files(base_path: &Path) -> Vec<(String, bool, PathBuf)> {
+    if let Some(file) = explicit_claude_transcript(base_path) {
+        return vec![file];
+    }
     let root = base_path.join("local-agent-mode-sessions");
     let mut projects_dirs = Vec::new();
     collect_projects_dirs(&root, &mut projects_dirs);
@@ -138,6 +144,30 @@ pub fn discover_claude_desktop_files(base_path: &Path) -> Vec<(String, bool, Pat
         results.extend(discover_project_jsonl_files(&projects_dir));
     }
     results
+}
+
+/// An explicit Claude JSONL file reads just that transcript. Preserve its
+/// project and child layout rather than treating a file as a data directory.
+fn explicit_claude_transcript(path: &Path) -> Option<(String, bool, PathBuf)> {
+    if !path.is_file() || path.extension().is_none_or(|ext| ext != "jsonl") {
+        return None;
+    }
+    let parent = path.parent()?;
+    let nested = parent.file_name().is_some_and(|name| name == "subagents");
+    let project = if nested {
+        parent.parent()?.parent()?
+    } else {
+        parent
+    };
+    let is_agent = nested
+        || path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("agent-"));
+    Some((
+        project.file_name()?.to_string_lossy().into_owned(),
+        is_agent,
+        path.to_path_buf(),
+    ))
 }
 
 /// Recursively collect every `.claude/projects` directory beneath `dir`.

@@ -77,6 +77,8 @@ pub struct ConversationRow {
     parse_error: Option<String>,
     raw_event: Option<String>,
     metadata: Option<String>,
+    // Native Claude/Codex child-session evidence; NULL when not established.
+    is_sub_agent: Option<bool>,
     // Event-message copies can precede their canonical response_item. Keep the
     // row long enough for later completion/usage correlation, then omit it.
     suppress_output: bool,
@@ -390,6 +392,26 @@ impl Conversations {
                 };
 
                 let mut row = row;
+                row.is_sub_agent = if *is_agent {
+                    Some(true)
+                } else {
+                    serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|value| {
+                            match value.get("isSidechain").and_then(|v| v.as_bool()) {
+                                Some(false) => Some(false),
+                                Some(true)
+                                    if value
+                                        .get("agentId")
+                                        .and_then(|v| v.as_str())
+                                        .is_some_and(|id| !id.is_empty()) =>
+                                {
+                                    Some(true)
+                                }
+                                _ => None,
+                            }
+                        })
+                };
                 row.file_path = Some(file_path.to_string_lossy().into_owned());
                 row.byte_offset = Some(line_offset);
                 row.ordinal = Some(file_line.saturating_sub(1));
@@ -414,6 +436,21 @@ impl Conversations {
                         row.project_path = cwd.clone();
                     }
                 }
+            }
+            // Session classification belongs to the transcript, including
+            // summary/unknown records that omit native base fields.
+            let file_is_sub_agent = if rows[file_rows_start..]
+                .iter()
+                .any(|row| row.is_sub_agent == Some(true))
+            {
+                Some(true)
+            } else {
+                rows[file_rows_start..]
+                    .iter()
+                    .find_map(|row| row.is_sub_agent)
+            };
+            for row in &mut rows[file_rows_start..] {
+                row.is_sub_agent = file_is_sub_agent;
             }
         }
         rows
@@ -1224,6 +1261,34 @@ impl Conversations {
             || spawn.is_some()
             || structured_thread_source.as_deref() == Some("subagent")
             || meta.thread_source.as_deref() == Some("subagent");
+        let thread_source = structured_thread_source
+            .or_else(|| meta.thread_source.clone())
+            .or_else(|| Self::json_string(index_metadata, &["thread_source"]));
+        let parent_session_id = meta
+            .parent_thread_id
+            .clone()
+            .or_else(|| spawn.and_then(|s| Self::json_string(s, &["parent_thread_id"])))
+            .or_else(|| {
+                Self::json_string(index_metadata, &["parent_session_id", "parent_thread_id"])
+            });
+        let is_sub_agent = if agent_path.as_deref().is_some_and(|path| !path.is_empty())
+            || spawn.is_some()
+            || parent_session_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            || source
+                .is_some_and(|source| source.get("subagent").is_some_and(|value| !value.is_null()))
+            || thread_source.as_deref() == Some("subagent")
+        {
+            Some(true)
+        } else {
+            match thread_source.as_deref() {
+                Some("cli" | "vscode" | "app") => Some(false),
+                // `codex exec` can be launched by a user or another agent.
+                // Absence of native lineage is not proof it is a root.
+                _ => None,
+            }
+        };
         ConversationRow {
             source: "codex".to_string(),
             session_id,
@@ -1248,9 +1313,7 @@ impl Conversations {
                 .map(|client| Self::normalize_codex_client(&client))
                 .or_else(|| Self::codex_client(meta)),
             originator: structured_originator.or_else(|| meta.originator.clone()),
-            thread_source: structured_thread_source
-                .or_else(|| meta.thread_source.clone())
-                .or_else(|| Self::json_string(index_metadata, &["thread_source"])),
+            thread_source,
             forked_from_session_id: meta.forked_from_id.clone().or_else(|| {
                 source.and_then(|s| {
                     Self::json_string(s, &["forked_from_session_id", "forked_from_id"])
@@ -1273,19 +1336,9 @@ impl Conversations {
             agent_role,
             slug: Self::json_string(index_metadata, &["title", "thread_name"])
                 .or_else(|| meta.title.clone()),
-            parent_session_id: meta
-                .parent_thread_id
-                .clone()
-                .or_else(|| {
-                    spawn
-                        .and_then(|s| s.get("parent_thread_id"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .or_else(|| {
-                    Self::json_string(index_metadata, &["parent_session_id", "parent_thread_id"])
-                }),
+            parent_session_id,
             is_agent,
+            is_sub_agent,
             session_created_at: meta
                 .timestamp
                 .clone()
@@ -2844,6 +2897,7 @@ impl TableFunc for Conversations {
             vtab::varchar("parse_error"),
             vtab::varchar("raw_event"),
             vtab::varchar("metadata"),
+            vtab::boolean("is_sub_agent"),
         ]
     }
 
@@ -3000,6 +3054,10 @@ impl TableFunc for Conversations {
                 54 => vtab::set_varchar_opt(output, output_col, idx, row.parse_error.as_deref()),
                 55 => vtab::set_varchar_opt(output, output_col, idx, row.raw_event.as_deref()),
                 56 => vtab::set_varchar_opt(output, output_col, idx, row.metadata.as_deref()),
+                57 => match row.is_sub_agent {
+                    Some(value) => vtab::set_bool(output, output_col, idx, value),
+                    None => output.flat_vector(output_col).set_null(idx),
+                },
                 _ => unreachable!("unknown conversations column"),
             }
         }
@@ -3076,6 +3134,10 @@ impl TableFunc for Conversations {
         vtab::set_varchar_opt(output, 54, idx, row.parse_error.as_deref());
         vtab::set_varchar_opt(output, 55, idx, row.raw_event.as_deref());
         vtab::set_varchar_opt(output, 56, idx, row.metadata.as_deref());
+        match row.is_sub_agent {
+            Some(value) => vtab::set_bool(output, 57, idx, value),
+            None => output.flat_vector(57).set_null(idx),
+        }
     }
 }
 

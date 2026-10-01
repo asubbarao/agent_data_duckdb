@@ -162,7 +162,7 @@ Reads conversation/event data.
 | `project_path` | VARCHAR | Project/working directory path |
 | `project_dir` | VARCHAR | Raw encoded directory name (Claude / Grok cwd dir) |
 | `file_name` | VARCHAR | Source filename |
-| `is_agent` | BOOLEAN | Sub-agent conversation (Claude; Grok via subagent meta linkage) |
+| `is_agent` | BOOLEAN | Legacy provider-specific agent classification; retained for compatibility |
 | `line_number` | BIGINT | Line number within file (1-based) |
 | `message_type` | VARCHAR | See message type mappings below |
 | `uuid` | VARCHAR | Message/event UUID |
@@ -267,6 +267,24 @@ it NULL otherwise. `session_id` keeps its existing file/native behavior.
 > `updates.jsonl`. The parser walks chat lines and assigns the next matching
 > wire event's ISO time (same `timestamp` column as Claude). No `updates.jsonl`
 > → summary session stamp only.
+
+#### Reading child conversations
+
+`read_conversations()` includes child transcripts. Filter with `is_sub_agent IS TRUE`; no separate reader is needed. This nullable column is appended after existing columns, and `is_agent` keeps its historical behavior.
+
+For Claude Code and Desktop transcripts, `TRUE` comes from native child layout (nested `subagents/` or legacy `agent-*.jsonl`) or `agentId` together with `isSidechain=true`. An explicit `isSidechain=false` establishes a native mainline transcript. Classification applies to every row in the transcript. Nested siblings can share their parent's `session_id`; distinguish them by `file_path` and native agent evidence. A Claude path can name one exact JSONL transcript when `source` is supplied.
+
+For Codex CLI and Desktop, `TRUE` comes from native subagent source metadata, nonempty `parent_thread_id`/`parent_session_id`, or nonempty `agent_path`. Native `cli`, `vscode`, and `app` source channels establish explicit primary/native sessions when child evidence is absent, independent of any external process launch. `FALSE` therefore does not prove a human started the session. `exec` and missing metadata remain `NULL`: a separately launched `codex exec` can be a user task or another agent's child. Retain launching tool events and child transcript IDs to reconstruct those links; a shared working directory does not establish a parent. Other providers return `NULL` for this scoped classification.
+
+```sql
+SELECT source,session_id,parent_session_id,file_path,model,message_content
+FROM read_conversations(path='~/.codex',source='codex')
+WHERE is_sub_agent IS TRUE;
+
+SELECT session_id,parent_session_id,file_path,message_content
+FROM read_conversations(path='~/.claude',source='claude')
+WHERE is_sub_agent IS TRUE;
+```
 
 ### `read_events([path (opt)], [source (opt)])`
 

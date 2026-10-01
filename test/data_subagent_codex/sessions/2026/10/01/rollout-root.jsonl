@@ -1,0 +1,2 @@
+{"type":"session_meta","payload":{"id":"root","source":"cli","cwd":"/project"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"launch-1","arguments":"{\"cmd\":\"codex exec --json child request\"}"}}
