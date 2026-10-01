@@ -63,6 +63,24 @@ pub struct UserMessage {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UserMessageContent {
+    pub content: Option<UserContent>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum UserContent {
+    Text(String),
+    Blocks(Vec<UserContentBlock>),
+    Other(serde_json::Value),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UserContentBlock {
+    #[serde(rename = "type")]
+    pub block_type: Option<String>,
+    pub text: Option<String>,
+    #[serde(rename = "tool_use_id")]
+    pub tool_use_id: Option<String>,
     pub content: Option<serde_json::Value>,
 }
 

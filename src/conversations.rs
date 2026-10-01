@@ -151,14 +151,9 @@ impl Conversations {
         is_agent: bool,
         file_session_id: &str,
         line_number: i64,
-    ) -> ConversationRow {
+    ) -> Vec<ConversationRow> {
         match msg {
             ConversationMessage::User(u) => {
-                let content = u
-                    .message
-                    .as_ref()
-                    .and_then(|m| m.content.as_ref())
-                    .map(utils::extract_text_content);
                 let mut row = Self::claude_base_row(
                     source,
                     &u.base,
@@ -170,8 +165,56 @@ impl Conversations {
                     "user",
                 );
                 row.message_role = Some("user".to_string());
-                row.message_content = content;
-                row
+
+                match u.message.and_then(|message| message.content) {
+                    Some(UserContent::Blocks(blocks)) => {
+                        let tool_results: Vec<&UserContentBlock> = blocks
+                            .iter()
+                            .filter(|block| block.block_type.as_deref() == Some("tool_result"))
+                            .collect();
+
+                        if tool_results.is_empty() {
+                            row.message_content = Some(
+                                blocks
+                                    .iter()
+                                    .filter_map(|block| block.text.as_deref())
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                            );
+                            vec![row]
+                        } else {
+                            let mut rows = Vec::new();
+                            let human_blocks: Vec<&str> = blocks
+                                .iter()
+                                .filter(|block| block.block_type.as_deref() == Some("text"))
+                                .filter_map(|block| block.text.as_deref())
+                                .collect();
+                            if !human_blocks.is_empty() {
+                                let mut human_row = row.clone();
+                                human_row.message_content = Some(human_blocks.join("\n"));
+                                rows.push(human_row);
+                            }
+                            for block in tool_results {
+                                let mut result_row = row.clone();
+                                result_row.message_type = "tool_result".to_string();
+                                result_row.tool_use_id = block.tool_use_id.clone();
+                                result_row.message_content =
+                                    block.content.as_ref().map(utils::extract_text_content);
+                                rows.push(result_row);
+                            }
+                            rows
+                        }
+                    }
+                    Some(UserContent::Text(content)) => {
+                        row.message_content = Some(content);
+                        vec![row]
+                    }
+                    Some(UserContent::Other(content)) => {
+                        row.message_content = Some(utils::extract_text_content(&content));
+                        vec![row]
+                    }
+                    None => vec![row],
+                }
             }
             ConversationMessage::Assistant(a) => {
                 let msg_content = a.message.as_ref();
@@ -216,7 +259,7 @@ impl Conversations {
                 row.cache_creation_tokens = usage.and_then(|u| u.cache_creation_input_tokens);
                 row.cache_read_tokens = usage.and_then(|u| u.cache_read_input_tokens);
                 row.stop_reason = msg_content.and_then(|m| m.stop_reason.clone());
-                row
+                vec![row]
             }
             ConversationMessage::System(s) => {
                 let mut row = Self::claude_base_row(
@@ -230,7 +273,7 @@ impl Conversations {
                     "system",
                 );
                 row.message_content = s.content.as_ref().map(utils::extract_text_content);
-                row
+                vec![row]
             }
             ConversationMessage::Summary(s) => {
                 let mut row = Self::claude_simple_row(
@@ -243,9 +286,9 @@ impl Conversations {
                     "summary",
                 );
                 row.message_content = s.summary;
-                row
+                vec![row]
             }
-            ConversationMessage::FileHistorySnapshot { .. } => Self::claude_simple_row(
+            ConversationMessage::FileHistorySnapshot { .. } => vec![Self::claude_simple_row(
                 source,
                 project_dir,
                 file_name,
@@ -253,7 +296,7 @@ impl Conversations {
                 file_session_id,
                 line_number,
                 "file-history-snapshot",
-            ),
+            )],
             ConversationMessage::QueueOperation(q) => {
                 let mut row = Self::claude_simple_row(
                     source,
@@ -269,7 +312,7 @@ impl Conversations {
                 }
                 row.timestamp = q.timestamp;
                 row.message_content = q.content;
-                row
+                vec![row]
             }
         }
     }
@@ -384,7 +427,7 @@ impl Conversations {
                     None
                 };
 
-                let row = match serde_json::from_str::<ConversationRecord>(&line) {
+                let parsed_rows = match serde_json::from_str::<ConversationRecord>(&line) {
                     Ok(ConversationRecord::Known(msg)) => Self::claude_message_to_row(
                         source,
                         msg,
@@ -394,7 +437,7 @@ impl Conversations {
                         &file_session_id,
                         file_line,
                     ),
-                    Ok(ConversationRecord::Unknown(msg)) => Self::claude_unknown_to_row(
+                    Ok(ConversationRecord::Unknown(msg)) => vec![Self::claude_unknown_to_row(
                         source,
                         msg,
                         project_dir,
@@ -402,7 +445,7 @@ impl Conversations {
                         *is_agent,
                         &file_session_id,
                         file_line,
-                    ),
+                    )],
                     Err(e) => {
                         let mut row = Self::claude_simple_row(
                             source,
@@ -415,26 +458,29 @@ impl Conversations {
                         );
                         row.message_content = Some(format!("Parse error: {}", e));
                         row.parse_error = Some(e.to_string());
-                        row
+                        vec![row]
                     }
                 };
 
-                let mut row = row;
-                row.file_path = Some(file_path.to_string_lossy().into_owned());
-                row.byte_offset = Some(line_offset);
-                row.ordinal = Some(file_line.saturating_sub(1));
-                if retain_raw_event {
-                    row.raw_event = Some(line.clone());
-                }
-                if *is_agent {
-                    row.parent_session_id = nested_parent_session_id.clone().or(native_session_id);
-                    row.agent_path = agent_path.clone();
-                }
+                for mut row in parsed_rows {
+                    row.file_path = Some(file_path.to_string_lossy().into_owned());
+                    row.byte_offset = Some(line_offset);
+                    row.ordinal = Some(file_line.saturating_sub(1));
+                    if retain_raw_event {
+                        row.raw_event = Some(line.clone());
+                    }
+                    if *is_agent {
+                        row.parent_session_id = nested_parent_session_id
+                            .clone()
+                            .or(native_session_id.clone());
+                        row.agent_path = agent_path.clone();
+                    }
 
-                if file_cwd.is_none() && row.cwd.is_some() {
-                    file_cwd = row.cwd.clone();
+                    if file_cwd.is_none() && row.cwd.is_some() {
+                        file_cwd = row.cwd.clone();
+                    }
+                    rows.push(row);
                 }
-                rows.push(row);
             }
 
             if let Some(ref cwd) = file_cwd {

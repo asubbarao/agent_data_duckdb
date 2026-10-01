@@ -1,0 +1,32 @@
+# name: test/sql/claude_tool_results.test
+# description: Claude user tool_result blocks become one result row per block without changing human user rows
+# group: [agent_data]
+
+require agent_data
+
+# Human string and text-block user messages remain ordinary user rows.
+query TTTT
+SELECT line_number, message_type, message_role, replace(message_content, chr(10), '|')
+FROM read_conversations(path='test/data_claude_tool_results')
+WHERE message_type = 'user'
+ORDER BY line_number;
+----
+1	user	user	human string
+2	user	user	human line one|human line two
+
+# Every tool_result block becomes its own row, preserving the call id and text.
+query TTTT
+SELECT tool_use_id, message_type, message_role, replace(message_content, chr(10), '|')
+FROM read_conversations(path='test/data_claude_tool_results')
+WHERE message_type = 'tool_result'
+ORDER BY tool_use_id;
+----
+toolu_fixture_one	tool_result	user	first result
+toolu_fixture_two	tool_result	user	second line one|second line two
+
+query I
+SELECT COUNT(*)
+FROM read_conversations(path='test/data_claude_tool_results')
+WHERE message_type = 'tool_result' AND tool_use_id IS NOT NULL AND message_content != '';
+----
+2
