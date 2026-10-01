@@ -128,7 +128,7 @@ SELECT COUNT(*) FROM read_stats(path='test/data_copilot');
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude', source='unknown_garbage');
 ----
-180
+258
 
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_copilot', source='unknown_garbage');

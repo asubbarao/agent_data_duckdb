@@ -89,4 +89,4 @@ SELECT
     (SELECT COUNT(*) FROM read_history(path='test/data_claude')) AS hist,
     (SELECT COUNT(*) FROM read_stats(path='test/data_claude')) AS stats;
 ----
-180	4	25	20	7
+258	4	25	20	7

@@ -8,7 +8,7 @@ require agent_data
 # UNION ALL counts across sources
 # ============================================================
 
-# Conversations: 180 + 53 = 233
+# Conversations: 258 + 53 = 311
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_claude')
@@ -16,7 +16,7 @@ SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_copilot')
 );
 ----
-233
+311
 
 # Plans: 4 + 1 = 5
 query I
@@ -59,7 +59,7 @@ SELECT source, COUNT(*) AS cnt FROM (
     SELECT * FROM read_conversations(path='test/data_copilot')
 ) GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 copilot	53
 
 # ============================================================
@@ -160,7 +160,7 @@ SELECT COUNT(DISTINCT source) FROM (
 # (requires the default-on `cursor` cargo feature)
 # ============================================================
 
-# Conversations across all three sources: 180 + 53 + 2 = 235
+# Conversations across all three sources: 258 + 53 + 2 = 313
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_claude')
@@ -170,7 +170,7 @@ SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_cursor')
 );
 ----
-235
+313
 
 # Source breakdown including Cursor
 query II
@@ -182,7 +182,7 @@ SELECT source, COUNT(*) AS cnt FROM (
     SELECT * FROM read_conversations(path='test/data_cursor')
 ) GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 copilot	53
 cursor	2
 
@@ -224,7 +224,7 @@ SELECT COUNT(DISTINCT source) FROM (
 # Codex participates in cross-source UNION
 # ============================================================
 
-# Conversations across all three sources: 180 + 53 + 6 = 239
+# Conversations across all three sources: 258 + 53 + 6 = 317
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_claude')
@@ -234,7 +234,7 @@ SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_codex')
 );
 ----
-239
+317
 
 # Source breakdown including Codex
 query II
@@ -246,7 +246,7 @@ SELECT source, COUNT(*) AS cnt FROM (
     SELECT * FROM read_conversations(path='test/data_codex')
 ) GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 codex	6
 copilot	53
 
@@ -288,7 +288,7 @@ SELECT COUNT(DISTINCT source) FROM (
 # Gemini participates in cross-source UNION
 # ============================================================
 
-# Conversations across all three sources: 180 + 53 + 11 = 244
+# Conversations across all three sources: 258 + 53 + 11 = 322
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_claude')
@@ -298,7 +298,7 @@ SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_gemini')
 );
 ----
-244
+322
 
 # Source breakdown including Gemini
 query II
@@ -310,7 +310,7 @@ SELECT source, COUNT(*) AS cnt FROM (
     SELECT * FROM read_conversations(path='test/data_gemini')
 ) GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 copilot	53
 gemini	11
 
@@ -353,7 +353,7 @@ SELECT COUNT(DISTINCT source) FROM (
 # Grok in a UNION — schema stays compatible across all three sources
 # ============================================================
 
-# Conversations UNION over claude + copilot + grok: 180 + 53 + 14 = 247
+# Conversations UNION over claude + copilot + grok: 258 + 53 + 14 = 325
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_claude')
@@ -363,7 +363,7 @@ SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_grok')
 );
 ----
-247
+325
 
 # Per-source breakdown including grok
 query II
@@ -375,7 +375,7 @@ SELECT source, COUNT(*) AS cnt FROM (
     SELECT * FROM read_conversations(path='test/data_grok')
 ) GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 copilot	53
 grok	14
 

@@ -274,7 +274,7 @@ true
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_claude') GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_copilot') GROUP BY source ORDER BY source;
@@ -296,13 +296,13 @@ SELECT source, COUNT(*) FROM read_conversations(path='test/data_gemini') GROUP B
 ----
 gemini	11
 
-# GROUP BY message_type on Claude produces 4 groups
+# GROUP BY message_type on Claude produces 5 groups, including thinking
 query I
 SELECT COUNT(*) FROM (
     SELECT message_type FROM read_conversations(path='test/data_claude') GROUP BY message_type
 );
 ----
-4
+5
 
 # GROUP BY message_type on Copilot produces 16 groups
 query I

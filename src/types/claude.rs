@@ -105,7 +105,7 @@ pub enum ContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]
-    Thinking {},
+    Thinking { thinking: Option<String> },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: Option<String>,

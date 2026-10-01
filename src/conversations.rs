@@ -193,7 +193,7 @@ impl Conversations {
                                 let mut human_row = row.clone();
                                 human_row.message_content = Some(human_blocks.join("\n"));
                                 rows.push(human_row);
-                            }
+                            },
                             for block in tool_results {
                                 let mut result_row = row.clone();
                                 result_row.message_type = "tool_result".to_string();
@@ -259,7 +259,32 @@ impl Conversations {
                 row.cache_creation_tokens = usage.and_then(|u| u.cache_creation_input_tokens);
                 row.cache_read_tokens = usage.and_then(|u| u.cache_read_input_tokens);
                 row.stop_reason = msg_content.and_then(|m| m.stop_reason.clone());
-                vec![row]
+
+                let mut rows = vec![row.clone()];
+                if let Some(blocks) = msg_content.and_then(|m| m.content.as_ref()) {
+                    for thinking in blocks.iter().filter_map(|block| match block {
+                        ContentBlock::Thinking { thinking }
+                            if thinking.as_deref().is_some_and(|text| !text.is_empty()) =>
+                        {
+                            thinking.clone()
+                        }
+                        _ => None,
+                    }) {
+                        let mut thinking_row = row.clone();
+                        thinking_row.message_type = "thinking".to_string();
+                        thinking_row.message_content = Some(thinking);
+                        thinking_row.tool_name = None;
+                        thinking_row.tool_use_id = None;
+                        thinking_row.tool_input = None;
+                        thinking_row.input_tokens = None;
+                        thinking_row.output_tokens = None;
+                        thinking_row.cache_creation_tokens = None;
+                        thinking_row.cache_read_tokens = None;
+                        thinking_row.stop_reason = None;
+                        rows.push(thinking_row);
+                    }
+                }
+                rows
             }
             ConversationMessage::System(s) => {
                 let mut row = Self::claude_base_row(
@@ -878,7 +903,7 @@ impl Conversations {
                             Ok(tc) => {
                                 turn = Self::merge_turn_context(turn, tc);
                                 canonical_messages.clear();
-                            },
+                            }
                             Err(e) => rows.push(Self::codex_context_row(
                                 session_uuid,
                                 &file_name,
