@@ -172,28 +172,33 @@ impl Conversations {
                             .iter()
                             .filter(|block| block.block_type.as_deref() == Some("tool_result"))
                             .collect();
+                        let human_blocks: Vec<String> = blocks
+                            .iter()
+                            .filter_map(|block| match block.block_type.as_deref() {
+                                Some("text") => block.text.clone(),
+                                Some("image") => Some(format!(
+                                    "[image: {}]",
+                                    block
+                                        .source
+                                        .as_ref()
+                                        .and_then(|source| source.get("media_type"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("unknown")
+                                )),
+                                _ => None,
+                            })
+                            .collect();
 
                         if tool_results.is_empty() {
-                            row.message_content = Some(
-                                blocks
-                                    .iter()
-                                    .filter_map(|block| block.text.as_deref())
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
-                            );
+                            row.message_content = Some(human_blocks.join("\n"));
                             vec![row]
                         } else {
                             let mut rows = Vec::new();
-                            let human_blocks: Vec<&str> = blocks
-                                .iter()
-                                .filter(|block| block.block_type.as_deref() == Some("text"))
-                                .filter_map(|block| block.text.as_deref())
-                                .collect();
                             if !human_blocks.is_empty() {
                                 let mut human_row = row.clone();
                                 human_row.message_content = Some(human_blocks.join("\n"));
                                 rows.push(human_row);
-                            },
+                            }
                             for block in tool_results {
                                 let mut result_row = row.clone();
                                 result_row.message_type = "tool_result".to_string();

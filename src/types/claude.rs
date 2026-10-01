@@ -81,6 +81,7 @@ pub struct UserContentBlock {
     pub text: Option<String>,
     #[serde(rename = "tool_use_id")]
     pub tool_use_id: Option<String>,
+    pub source: Option<serde_json::Value>,
     pub content: Option<serde_json::Value>,
 }
 

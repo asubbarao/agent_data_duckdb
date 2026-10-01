@@ -1,0 +1,20 @@
+# name: test/sql/claude_images.test
+# description: Claude user image blocks become safe media-type placeholders
+# group: [agent_data]
+
+require agent_data
+
+query T
+SELECT replace(message_content, chr(10), '|')
+FROM read_conversations(path='test/data_claude_images')
+WHERE message_type = 'user';
+----
+Please inspect this screenshot.|[image: image/png]
+
+# Image data is not copied into the row.
+query I
+SELECT COUNT(*)
+FROM read_conversations(path='test/data_claude_images')
+WHERE message_content LIKE '%not-secret-fixture-data%';
+----
+0
