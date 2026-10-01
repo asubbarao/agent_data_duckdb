@@ -1,0 +1,22 @@
+# name: test/sql/claude_attachments.test
+# description: Claude attachment rows expose subtype and rendered injected text
+# group: [agent_data]
+
+require agent_data
+
+query TTTT
+SELECT uuid, message_type, tool_name, replace(message_content, chr(10), '|')
+FROM read_conversations(path='test/data_claude_attachments')
+WHERE message_type = 'attachment'
+ORDER BY uuid;
+----
+attachment-environment	attachment	environment	Injected environment context.
+attachment-hook	attachment	hook_success	Hook completed successfully.|Additional rendered line.
+
+# Payload fields are not substituted for rendered text.
+query I
+SELECT COUNT(*)
+FROM read_conversations(path='test/data_claude_attachments')
+WHERE message_content LIKE '%must-not-leak%' OR message_content LIKE '%raw hook content%';
+----
+0

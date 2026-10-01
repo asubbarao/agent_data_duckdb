@@ -356,7 +356,7 @@ impl Conversations {
         file_session_id: &str,
         line_number: i64,
     ) -> ConversationRow {
-        Self::claude_base_row(
+        let mut row = Self::claude_base_row(
             source,
             &msg.base,
             project_dir,
@@ -365,7 +365,41 @@ impl Conversations {
             file_session_id,
             line_number,
             &msg.record_type,
-        )
+        );
+        if msg.record_type == "attachment" {
+            row.tool_name = msg
+                .attachment
+                .as_ref()
+                .and_then(|attachment| attachment.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            row.message_content = msg
+                .rendered
+                .as_ref()
+                .and_then(Self::claude_rendered_content);
+        }
+        row
+    }
+
+    fn claude_rendered_content(rendered: &serde_json::Value) -> Option<String> {
+        let values: Vec<&serde_json::Value> = match rendered {
+            serde_json::Value::Array(entries) => entries
+                .iter()
+                .map(|entry| {
+                    entry
+                        .get("content")
+                        .unwrap_or(entry)
+                })
+                .collect(),
+            _ => vec![rendered],
+        };
+        let content = values
+            .iter()
+            .map(|value| utils::extract_text_content(value))
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!content.is_empty()).then_some(content)
     }
 
     fn load_claude_rows(

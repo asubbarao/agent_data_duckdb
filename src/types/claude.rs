@@ -36,6 +36,8 @@ pub struct UnknownMessage {
     pub record_type: String,
     #[serde(flatten)]
     pub base: BaseFields,
+    pub attachment: Option<serde_json::Value>,
+    pub rendered: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
