@@ -179,6 +179,7 @@ Reads conversation/event data.
 | `stop_reason` | VARCHAR | Claude API stop reason (NULL for Grok) |
 | `reasoning_effort` | VARCHAR | Grok-only: per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other sources |
 | `repository` | VARCHAR | GitHub repository (Copilot; Grok from `summary.git_remotes[0]`) |
+| `raw_json` | VARCHAR | Claude: the source record when the reader has no typed mapping for its type (`attachment`, `ai-title`, `permission-mode`, future types, ...) or the line is not JSON; NULL otherwise. Such records keep their own type as `message_type` and their text, where they have one, in `message_content` |
 
 **Message type mappings:**
 

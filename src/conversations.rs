@@ -9,6 +9,7 @@ use crate::types::grok::*;
 use crate::utils;
 use crate::vtab::{self, ColDef, TableFunc};
 use duckdb::core::DataChunkHandle;
+use serde::Deserialize;
 use std::io::{BufRead, BufReader};
 
 /// A flattened conversation row ready for output.
@@ -45,6 +46,8 @@ pub struct ConversationRow {
     /// Grok-only: per-message effort, else session summary backfill.
     reasoning_effort: Option<String>,
     repository: Option<String>,
+    /// The source record, for records the reader has no typed mapping for.
+    raw_json: Option<String>,
 }
 
 pub struct Conversations;
@@ -157,6 +160,48 @@ impl Conversations {
         }
     }
 
+    /// A valid JSON record the typed parser does not model (Claude Code adds
+    /// record types often). It keeps its own type, the shared metadata fields,
+    /// its text where it has one, and the record itself in `raw_json`.
+    fn claude_untyped_row(source: &str, value: &serde_json::Value, line: &str, project_dir: &str,
+                          file_name: &str, is_agent: bool, file_session_id: &str, line_number: i64) -> ConversationRow {
+        let base = BaseFields::deserialize(value).unwrap_or_default();
+        let record_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("_unknown_type");
+        let mut row = Self::claude_base_row(source, &base, project_dir, file_name, is_agent, file_session_id, line_number, record_type);
+        row.message_content = Self::claude_record_text(record_type, value);
+        row.raw_json = Some(line.to_string());
+        row
+    }
+
+    fn claude_record_text(record_type: &str, value: &serde_json::Value) -> Option<String> {
+        let text = |v: &serde_json::Value| match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Array(items) => Some(items.iter()
+                .filter_map(|i| i.as_str().or_else(|| i.get("text").and_then(|t| t.as_str())))
+                .collect::<Vec<_>>().join("\n")),
+            _ => None,
+        };
+        match record_type {
+            "attachment" => {
+                let attachment = value.get("attachment")?;
+                ["text", "prompt", "content"].iter().find_map(|k| attachment.get(*k).and_then(text))
+            }
+            "pr-link" => value.get("prUrl").and_then(text),
+            // ai-title, custom-title, agent-name, last-prompt, permission-mode, ...
+            // hold their value in the camelCase field named after the type.
+            _ => {
+                let mut field = String::new();
+                let mut upper = false;
+                for c in record_type.chars() {
+                    if c == '-' { upper = true; continue; }
+                    if upper { field.extend(c.to_uppercase()); } else { field.push(c); }
+                    upper = false;
+                }
+                value.get(&field).and_then(|v| v.as_str()).map(String::from)
+            }
+        }
+    }
+
     fn load_claude_rows(base_path: &std::path::Path) -> Vec<ConversationRow> {
         let files = utils::discover_conversation_files(base_path);
         Self::load_claude_jsonl_rows("claude", &files)
@@ -202,11 +247,16 @@ impl Conversations {
 
                 let row = match serde_json::from_str::<ConversationMessage>(&line) {
                     Ok(msg) => Self::claude_message_to_row(source, msg, project_dir, &file_name, *is_agent, &file_session_id, file_line),
-                    Err(e) => {
-                        let mut row = Self::claude_simple_row(source, project_dir, &file_name, *is_agent, &file_session_id, file_line, "_parse_error");
-                        row.message_content = Some(format!("Parse error: {}", e));
-                        row
-                    }
+                    // _parse_error is reserved for lines that are not JSON.
+                    Err(e) => match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(value) => Self::claude_untyped_row(source, &value, &line, project_dir, &file_name, *is_agent, &file_session_id, file_line),
+                        Err(_) => {
+                            let mut row = Self::claude_simple_row(source, project_dir, &file_name, *is_agent, &file_session_id, file_line, "_parse_error");
+                            row.message_content = Some(format!("Parse error: {}", e));
+                            row.raw_json = Some(line.clone());
+                            row
+                        }
+                    },
                 };
 
                 if file_cwd.is_none() && row.cwd.is_some() {
@@ -1189,6 +1239,7 @@ impl TableFunc for Conversations {
             vtab::varchar("git_branch"),    vtab::varchar("cwd"),
             vtab::varchar("version"),       vtab::varchar("stop_reason"),
             vtab::varchar("reasoning_effort"), vtab::varchar("repository"),
+            vtab::varchar("raw_json"),
         ]
     }
 
@@ -1236,5 +1287,6 @@ impl TableFunc for Conversations {
         vtab::set_varchar_opt(output, 26, idx, row.stop_reason.as_deref());
         vtab::set_varchar_opt(output, 27, idx, row.reasoning_effort.as_deref());
         vtab::set_varchar_opt(output, 28, idx, row.repository.as_deref());
+        vtab::set_varchar_opt(output, 29, idx, row.raw_json.as_deref());
     }
 }

@@ -1,0 +1,9 @@
+{"type":"ai-title","aiTitle":"Fix the parser","sessionId":"aaaaaaaa-1111-4111-8111-111111111111"}
+{"type":"permission-mode","permissionMode":"acceptEdits","sessionId":"aaaaaaaa-1111-4111-8111-111111111111"}
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"hello"},"uuid":"u1","timestamp":"2026-09-20T12:00:00.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","cwd":"/Users/testuser/records","version":"2.1.0","gitBranch":"main"}
+{"parentUuid":"u1","isSidechain":false,"type":"attachment","attachment":{"type":"queued_command","prompt":"also run the tests","commandMode":"prompt"},"uuid":"a1","timestamp":"2026-09-20T12:00:01.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","cwd":"/Users/testuser/records","version":"2.1.0","gitBranch":"main"}
+{"parentUuid":"a1","type":"attachment","attachment":{"type":"hook_additional_context","content":["first","second"],"hookName":"SessionStart"},"uuid":"a2","timestamp":"2026-09-20T12:00:02.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111"}
+{"type":"pr-link","prNumber":7,"prUrl":"https://github.com/o/r/pull/7","prRepository":"o/r","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-20T12:00:03.000Z"}
+{"type":"future-checkpoint","uuid":"f1","timestamp":"2026-09-20T12:00:04.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","payload":{"note":"must survive"}}
+{"parentUuid":"u1","type":"assistant","message":{"model":"claude-test","content":[{"type":"redacted_thinking","data":"x"}]},"uuid":"r1","timestamp":"2026-09-20T12:00:05.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111"}
+{"type":"user","message":
