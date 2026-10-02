@@ -292,12 +292,51 @@ pub fn extract_text_content(value: &serde_json::Value) -> String {
             for item in arr {
                 if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                     parts.push(text.to_string());
+                } else if item.get("type").and_then(|t| t.as_str()) == Some("image")
+                    && item.get("source").is_some()
+                {
+                    let source = item.get("source").expect("source checked above");
+                    let media_type = source
+                        .get("media_type")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| item.get("media_type").and_then(|value| value.as_str()))
+                        .unwrap_or("unknown");
+                    let byte_size = source
+                        .get("data")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| item.get("data").and_then(|value| value.as_str()))
+                        .map(base64_decoded_size)
+                        .unwrap_or(0);
+                    parts.push(format!("[image: {media_type}, {byte_size} bytes]"));
                 }
             }
             parts.join("\n")
         }
         _ => value.to_string(),
     }
+}
+
+/// Return the decoded byte length of a base64 payload without decoding or
+/// retaining its image data. Claude image blocks use padded base64, but the
+/// calculation also handles unpadded payloads and embedded ASCII whitespace.
+fn base64_decoded_size(data: &str) -> usize {
+    let mut encoded_len: usize = 0;
+    let mut padding: usize = 0;
+    for byte in data.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        encoded_len += 1;
+        if byte == b'=' {
+            padding += 1;
+        }
+    }
+
+    let full_quads = encoded_len / 4;
+    let remainder = encoded_len % 4;
+    let remainder_bytes = match remainder {
+        2 => 1,
+        3 => 2,
+        _ => 0,
+    };
+    (full_quads * 3 + remainder_bytes).saturating_sub(padding.min(2))
 }
 
 // ─── Copilot Discovery Functions ───

@@ -203,6 +203,13 @@ impl Conversations {
                                 let mut result_row = row.clone();
                                 result_row.message_type = "tool_result".to_string();
                                 result_row.tool_use_id = block.tool_use_id.clone();
+                                result_row.status = block.is_error.map(|is_error| {
+                                    if is_error {
+                                        "failed".to_string()
+                                    } else {
+                                        "completed".to_string()
+                                    }
+                                });
                                 result_row.message_content =
                                     block.content.as_ref().map(utils::extract_text_content);
                                 rows.push(result_row);

@@ -14,19 +14,29 @@ ORDER BY line_number;
 1	user	user	human string
 2	user	user	human line one|human line two
 
-# Every tool_result block becomes its own row, preserving the call id and text.
-query TTTT
-SELECT tool_use_id, message_type, message_role, replace(message_content, chr(10), '|')
+# Every tool_result block becomes its own row, preserving the call id, status,
+# text, and a safe image placeholder with decoded byte size.
+query TTTTT
+SELECT tool_use_id, message_type, message_role, coalesce(status, 'NULL'), replace(message_content, chr(10), '|')
 FROM read_conversations(path='test/data_claude_tool_results')
 WHERE message_type = 'tool_result'
 ORDER BY tool_use_id;
 ----
-toolu_fixture_one	tool_result	user	first result
-toolu_fixture_two	tool_result	user	second line one|second line two
+toolu_fixture_one	tool_result	user	NULL	first result
+toolu_fixture_three	tool_result	user	failed	synthetic failure|[image: image/png, 5 bytes]
+toolu_fixture_two	tool_result	user	completed	second line one|second line two
 
 query I
 SELECT COUNT(*)
 FROM read_conversations(path='test/data_claude_tool_results')
 WHERE message_type = 'tool_result' AND tool_use_id IS NOT NULL AND message_content != '';
 ----
-2
+3
+
+# The image payload itself is never copied into message_content.
+query I
+SELECT COUNT(*)
+FROM read_conversations(path='test/data_claude_tool_results')
+WHERE message_content LIKE '%AAECAwQ=%';
+----
+0
