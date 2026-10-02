@@ -40,12 +40,16 @@ pub struct CodexSessionMeta {
 impl CodexSessionMeta {
     /// Codex marks the sessions it spawns itself in `source.subagent`.
     pub fn is_subagent(&self) -> bool {
-        self.source.as_ref().and_then(|s| s.get("subagent")).is_some()
+        self.source
+            .as_ref()
+            .and_then(|s| s.get("subagent"))
+            .is_some()
     }
 
     pub fn parent_session_id(&self) -> Option<String> {
         self.parent_thread_id.clone().or_else(|| {
-            self.source.as_ref()?
+            self.source
+                .as_ref()?
                 .pointer("/subagent/thread_spawn/parent_thread_id")?
                 .as_str()
                 .map(String::from)

@@ -4,10 +4,12 @@
 
 require agent_data
 
-# A sub-agent's session_meta.source is an object; its rows still get cwd,
-# branch and version, is_agent, and the parent session id in parent_uuid.
-# The child rollout replays its parent's session_meta on line 2; the child's
-# own record wins.
+# 0001 is a top-level session (source is the string "vscode").
+# 0002 is a thread_spawn sub-agent: source is an object, the parent id sits only
+#   inside source, and the rollout replays its parent's session_meta on line 2.
+#   The child's own record wins.
+# 0003 is a guardian sub-agent with the parent id in top-level parent_thread_id.
+# 0004 is a review sub-agent (source.subagent is a string) with no parent id.
 query TITTTTI
 SELECT session_id, is_agent, parent_uuid, cwd, git_branch, version, COUNT(*)
 FROM read_conversations(path='test/data_codex_subagents', source='codex')
@@ -17,9 +19,11 @@ ORDER BY session_id;
 01a0a278-0000-7000-8000-000000000001	false	NULL	/Users/testuser/parent	main	0.154.0	2
 01a0a279-0000-7000-8000-000000000002	true	01a0a278-0000-7000-8000-000000000001	/Users/testuser/child	review	0.154.0	2
 01a0a27a-0000-7000-8000-000000000003	true	01a0a278-0000-7000-8000-000000000001	/Users/testuser/parent	NULL	0.154.0	1
+01a0a27b-0000-7000-8000-000000000004	true	NULL	/Users/testuser/parent	NULL	0.154.0	1
 
-# The existing top-level fixture (source "vscode") is not a sub-agent.
-query I
-SELECT COUNT(*) FROM read_conversations(path='test/data_codex', source='codex') WHERE is_agent;
+# The existing top-level fixture is unchanged: no sub-agents, no parent ids.
+query IT
+SELECT DISTINCT is_agent, parent_uuid
+FROM read_conversations(path='test/data_codex', source='codex');
 ----
-0
+false	NULL
