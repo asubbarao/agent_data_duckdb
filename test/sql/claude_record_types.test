@@ -4,10 +4,12 @@
 
 require agent_data
 
-# Every line is a row; only the truncated last line is a parse error.
+# Every JSON line keeps its own type and session. Line 7 is an unknown type
+# with no text, line 8 a known type whose content does not fit the typed
+# parser, line 9 has no type at all. Only the truncated line 10 is not JSON.
 query IIIT
 SELECT line_number, message_type, session_id,
-       CASE WHEN message_type = '_parse_error' THEN '(error)' ELSE replace(message_content, chr(10), '|') END
+       CASE WHEN message_type = '_parse_error' THEN left(message_content, 12) ELSE replace(message_content, chr(10), '|') END
 FROM read_conversations(path='test/data_claude_record_types', source='claude')
 ORDER BY line_number;
 ----
@@ -19,17 +21,21 @@ ORDER BY line_number;
 6	pr-link	aaaaaaaa-1111-4111-8111-111111111111	https://github.com/o/r/pull/7
 7	future-checkpoint	aaaaaaaa-1111-4111-8111-111111111111	NULL
 8	assistant	aaaaaaaa-1111-4111-8111-111111111111	NULL
-9	_parse_error	aaaaaaaa-1111-4111-8111-111111111111	(error)
+9	_unknown_type	aaaaaaaa-1111-4111-8111-111111111111	NULL
+10	_parse_error	aaaaaaaa-1111-4111-8111-111111111111	Parse error:
 
 # Shared metadata is kept, and the file's cwd backfills project_path.
-query TTTTTT
-SELECT uuid, parent_uuid, timestamp, cwd, git_branch, project_path
+query ITTTTTT
+SELECT line_number, uuid, parent_uuid, timestamp, cwd, git_branch, project_path
 FROM read_conversations(path='test/data_claude_record_types', source='claude')
-WHERE line_number = 4;
+WHERE line_number IN (4, 8, 9)
+ORDER BY line_number;
 ----
-a1	u1	2026-09-20T12:00:01.000Z	/Users/testuser/records	main	/Users/testuser/records
+4	a1	u1	2026-09-20T12:00:01.000Z	/Users/testuser/records	main	/Users/testuser/records
+8	r1	u1	2026-09-20T12:00:05.000Z	NULL	NULL	/Users/testuser/records
+9	n1	NULL	2026-09-20T12:00:06.000Z	NULL	NULL	/Users/testuser/records
 
-# Untyped records keep the source JSON; typed records do not duplicate it.
+# Rows the typed parser did not produce keep the source line; typed rows leave it NULL.
 query IT
 SELECT line_number, raw_json IS NOT NULL
 FROM read_conversations(path='test/data_claude_record_types', source='claude')
@@ -44,6 +50,14 @@ ORDER BY line_number;
 7	true
 8	true
 9	true
+10	true
+
+query T
+SELECT raw_json
+FROM read_conversations(path='test/data_claude_record_types', source='claude')
+WHERE line_number = 2;
+----
+{"type":"permission-mode","permissionMode":"acceptEdits","sessionId":"aaaaaaaa-1111-4111-8111-111111111111"}
 
 query TT
 SELECT json_extract_string(raw_json, '$.payload.note'), json_extract_string(raw_json, '$.attachment.type')

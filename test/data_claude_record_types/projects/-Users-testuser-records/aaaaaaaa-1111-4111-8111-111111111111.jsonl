@@ -6,4 +6,5 @@
 {"type":"pr-link","prNumber":7,"prUrl":"https://github.com/o/r/pull/7","prRepository":"o/r","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-20T12:00:03.000Z"}
 {"type":"future-checkpoint","uuid":"f1","timestamp":"2026-09-20T12:00:04.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","payload":{"note":"must survive"}}
 {"parentUuid":"u1","type":"assistant","message":{"model":"claude-test","content":[{"type":"redacted_thinking","data":"x"}]},"uuid":"r1","timestamp":"2026-09-20T12:00:05.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111"}
+{"uuid":"n1","timestamp":"2026-09-20T12:00:06.000Z","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","note":"no type field"}
 {"type":"user","message":
