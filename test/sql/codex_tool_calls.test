@@ -1,0 +1,35 @@
+# name: test/sql/codex_tool_calls.test
+# description: Codex function and custom tool calls keep name, input and output; agent messages keep their text
+# group: [agent_data]
+
+require agent_data
+
+query ITTTTTT
+SELECT line_number, message_type, message_role, tool_name, tool_use_id, tool_input, message_content
+FROM read_conversations(path='test/data_codex_tools', source='codex')
+ORDER BY line_number;
+----
+2	function_call	tool	shell	call_f	{"cmd":"ls"}	NULL
+3	function_call_output	tool	NULL	call_f	NULL	a.txt
+4	custom_tool_call	tool	exec	call_c	const r = await tools.exec_command({cmd: 'ls'});	NULL
+5	custom_tool_call_output	tool	NULL	call_c	NULL	Script completed
+6	agent_message	NULL	NULL	NULL	NULL	Review finished
+
+# function_call arguments are JSON text, not a JSON-encoded string.
+query T
+SELECT json_extract_string(tool_input, '$.cmd')
+FROM read_conversations(path='test/data_codex_tools', source='codex')
+WHERE message_type = 'function_call';
+----
+ls
+
+# A tool result joins back to its call through tool_use_id.
+query TT
+SELECT c.tool_name, o.message_content
+FROM read_conversations(path='test/data_codex_tools', source='codex') c
+JOIN read_conversations(path='test/data_codex_tools', source='codex') o
+  ON o.tool_use_id = c.tool_use_id AND o.message_type = c.message_type || '_output'
+ORDER BY c.line_number;
+----
+shell	a.txt
+exec	Script completed

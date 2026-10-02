@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-09-26T03:52:00.000Z","payload":{"id":"01a0b000-0000-7000-8000-000000000004","cwd":"/Users/testuser/project","cli_version":"0.154.0","source":"cli"}}
+{"type":"response_item","timestamp":"2026-09-26T03:52:01.000Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls\"}","call_id":"call_f"}}
+{"type":"response_item","timestamp":"2026-09-26T03:52:02.000Z","payload":{"type":"function_call_output","call_id":"call_f","output":"a.txt"}}
+{"type":"response_item","timestamp":"2026-09-26T03:52:03.000Z","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_c","name":"exec","input":"const r = await tools.exec_command({cmd: 'ls'});"}}
+{"type":"response_item","timestamp":"2026-09-26T03:52:04.000Z","payload":{"type":"custom_tool_call_output","call_id":"call_c","output":[{"type":"input_text","text":"Script completed"}]}}
+{"type":"response_item","timestamp":"2026-09-26T03:52:05.000Z","payload":{"type":"agent_message","author":"/root/reviewer","recipient":"/root","content":[{"type":"input_text","text":"Review finished"},{"type":"encrypted_content","encrypted_content":"gAAAA"}]}}

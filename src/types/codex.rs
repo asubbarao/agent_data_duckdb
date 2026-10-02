@@ -63,6 +63,8 @@ pub struct CodexResponseItem {
     // function_call
     pub name: Option<String>,
     pub arguments: Option<serde_json::Value>,
+    // custom_tool_call
+    pub input: Option<serde_json::Value>,
     pub call_id: Option<String>,
     // function_call_output
     pub output: Option<serde_json::Value>,

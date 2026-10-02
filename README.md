@@ -166,7 +166,7 @@ Reads conversation/event data.
 | `model` | VARCHAR | AI model used |
 | `tool_name` | VARCHAR | Tool called |
 | `tool_use_id` | VARCHAR | Tool use/call identifier |
-| `tool_input` | VARCHAR | Tool input as JSON string |
+| `tool_input` | VARCHAR | Tool input as JSON string (Codex custom tools such as `apply_patch`: their freeform input text) |
 | `input_tokens` | BIGINT | Input token count (Claude/Gemini per-message, Copilot truncation; **Grok: last `updates.jsonl` turn_completed `inputTokens`**, session aggregate duplicated on every row) |
 | `output_tokens` | BIGINT | Output token count (**Grok: last turn_completed `outputTokens`**) |
 | `cache_creation_tokens` | BIGINT | Cache creation tokens (Claude only; Grok always NULL) |
