@@ -224,7 +224,7 @@ SELECT COUNT(DISTINCT source) FROM (
 # Codex participates in cross-source UNION
 # ============================================================
 
-# Conversations across all three sources: 180 + 53 + 5 = 238
+# Conversations across all three sources: 180 + 53 + 6 = 239
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_claude')
@@ -234,7 +234,7 @@ SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_codex')
 );
 ----
-238
+239
 
 # Source breakdown including Codex
 query II
@@ -247,7 +247,7 @@ SELECT source, COUNT(*) AS cnt FROM (
 ) GROUP BY source ORDER BY source;
 ----
 claude	180
-codex	5
+codex	6
 copilot	53
 
 # Three distinct sources in the conversations UNION

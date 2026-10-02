@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Resolve a data directory path.
@@ -5,7 +6,7 @@ use std::path::{Path, PathBuf};
 /// If no path, default to ~/.claude (legacy default).
 pub fn resolve_data_path(path: Option<&str>) -> PathBuf {
     match path {
-        Some(p) => expand_tilde(p),
+        Some(p) => expand_user_path(p),
         None => {
             let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
             home.join(".claude")
@@ -14,7 +15,7 @@ pub fn resolve_data_path(path: Option<&str>) -> PathBuf {
 }
 
 /// Expand ~ at the start of a path to the user's home directory.
-fn expand_tilde(path: &str) -> PathBuf {
+pub fn expand_user_path(path: &str) -> PathBuf {
     if path.starts_with("~/") || path == "~" {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         if path == "~" {
@@ -31,6 +32,9 @@ fn expand_tilde(path: &str) -> PathBuf {
 /// Returns (project_dir_encoded, is_agent, file_path) tuples sorted deterministically.
 /// project_dir_encoded is the raw folder name (e.g., "-Users-testuser-project-alpha").
 pub fn discover_conversation_files(base_path: &Path) -> Vec<(String, bool, PathBuf)> {
+    if let Some(file) = explicit_claude_transcript(base_path) {
+        return vec![file];
+    }
     let projects_dir = base_path.join("projects");
     discover_project_jsonl_files(&projects_dir)
 }
@@ -63,11 +67,7 @@ fn discover_project_jsonl_files(projects_dir: &Path) -> Vec<(String, bool, PathB
             .into_iter()
             .flatten()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map_or(false, |ext| ext == "jsonl")
-            })
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
             .collect();
         jsonl_files.sort_by_key(|e| e.file_name());
 
@@ -111,11 +111,7 @@ fn discover_subagent_files(project_dir: &Path) -> Vec<PathBuf> {
             .into_iter()
             .flatten()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map_or(false, |ext| ext == "jsonl")
-            })
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
             .collect();
         jsonl_files.sort_by_key(|e| e.file_name());
 
@@ -136,6 +132,9 @@ fn discover_subagent_files(project_dir: &Path) -> Vec<PathBuf> {
 /// shared `discover_project_jsonl_files` walk so the subagent fix applies here too.
 /// Returns (project_dir_encoded, is_agent, file_path) tuples sorted deterministically.
 pub fn discover_claude_desktop_files(base_path: &Path) -> Vec<(String, bool, PathBuf)> {
+    if let Some(file) = explicit_claude_transcript(base_path) {
+        return vec![file];
+    }
     let root = base_path.join("local-agent-mode-sessions");
     let mut projects_dirs = Vec::new();
     collect_projects_dirs(&root, &mut projects_dirs);
@@ -145,7 +144,154 @@ pub fn discover_claude_desktop_files(base_path: &Path) -> Vec<(String, bool, Pat
     for projects_dir in projects_dirs {
         results.extend(discover_project_jsonl_files(&projects_dir));
     }
+    results.extend(discover_desktop_files_in_claude_home(base_path));
+
+    // The two walks should be disjoint; a symlinked `.claude` would make them
+    // overlap and double every count, so de-duplicate by path.
+    let mut seen = HashSet::new();
+    results.retain(|(_, _, path)| seen.insert(path.clone()));
     results
+}
+
+/// An explicit Claude JSONL file reads just that transcript. Preserve its
+/// project and child layout rather than treating a file as a data directory.
+fn explicit_claude_transcript(path: &Path) -> Option<(String, bool, PathBuf)> {
+    if !path.is_file() || path.extension().is_none_or(|ext| ext != "jsonl") {
+        return None;
+    }
+    let parent = path.parent()?;
+    let nested = parent.file_name().is_some_and(|name| name == "subagents");
+    let project = if nested {
+        parent.parent()?.parent()?
+    } else {
+        parent
+    };
+    let is_agent = nested
+        || path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("agent-"));
+    Some((
+        project.file_name()?.to_string_lossy().into_owned(),
+        is_agent,
+        path.to_path_buf(),
+    ))
+}
+
+/// Desktop sessions in a scratch workspace write their transcript to the
+/// Claude Code location, `~/.claude/projects/<encoded-cwd>/`, not under
+/// `local-agent-mode-sessions/`. A transcript is Desktop's when its encoded
+/// cwd is inside `base_path`, or when Desktop's own session registry lists it.
+fn discover_desktop_files_in_claude_home(base_path: &Path) -> Vec<(String, bool, PathBuf)> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+    desktop_files_under(
+        base_path,
+        &base_path.join("claude-code-sessions"),
+        &home.join(".claude").join("projects"),
+    )
+}
+
+fn desktop_files_under(
+    base_path: &Path,
+    registry_dir: &Path,
+    projects_dir: &Path,
+) -> Vec<(String, bool, PathBuf)> {
+    let desktop = DesktopSessions::new(base_path, registry_dir);
+    if desktop.prefix.is_none() || !projects_dir.is_dir() {
+        return Vec::new();
+    }
+    discover_project_jsonl_files(projects_dir)
+        .into_iter()
+        .filter(|(encoded, _, path)| desktop.owns(encoded, path))
+        .collect()
+}
+
+/// Where Claude Desktop keeps its data when nothing else says so:
+/// `~/Library/Application Support/Claude` on macOS, `%APPDATA%\Claude` on
+/// Windows, `~/.config/Claude` on Linux.
+pub fn default_claude_desktop_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("Claude"))
+}
+
+/// Recognises the Claude Code transcripts that belong to Claude Desktop
+/// sessions: the encoded cwd is inside Desktop's data directory (a scratch
+/// workspace), or Desktop's session registry lists the session.
+pub struct DesktopSessions {
+    prefix: Option<String>,
+    registry_session_ids: HashSet<String>,
+}
+
+impl DesktopSessions {
+    /// Read the registry of the Desktop data directory `base_path`.
+    pub fn at(base_path: &Path) -> Self {
+        Self::new(base_path, &base_path.join("claude-code-sessions"))
+    }
+
+    fn new(base_path: &Path, registry_dir: &Path) -> Self {
+        // A relative or empty base path encodes to a prefix that matches far too
+        // much (`""` matches every project directory).
+        let prefix = Some(encode_project_path(base_path))
+            .filter(|p| base_path.is_absolute() && p.len() > 1);
+        let mut registry_session_ids = HashSet::new();
+        if prefix.is_some() {
+            collect_desktop_registry_session_ids(registry_dir, &mut registry_session_ids);
+        }
+        DesktopSessions { prefix, registry_session_ids }
+    }
+
+    /// Is the transcript at `path`, in project directory `encoded`, Desktop's?
+    pub fn owns(&self, encoded: &str, path: &Path) -> bool {
+        match &self.prefix {
+            Some(prefix) => {
+                encoded_is_under(encoded, prefix)
+                    || self.registry_session_ids.contains(&fallback_session_id(path))
+            }
+            None => false,
+        }
+    }
+}
+
+/// Collect `cliSessionId` from every `local_*.json` under Desktop's session
+/// registry. Unreadable or malformed files are skipped.
+fn collect_desktop_registry_session_ids(dir: &Path, session_ids: &mut HashSet<String>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_desktop_registry_session_ids(&path, session_ids);
+            continue;
+        }
+        let is_registry_file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map_or(false, |name| name.starts_with("local_") && name.ends_with(".json"));
+        if !is_registry_file {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else { continue };
+        if let Some(session_id) = value.get("cliSessionId").and_then(|id| id.as_str()) {
+            session_ids.insert(session_id.to_string());
+        }
+    }
+}
+
+/// Is `encoded` the base directory itself, or something inside it? The
+/// encoding has no escape for the separator, so a bare `starts_with` would
+/// match an unrelated sibling (`/a/design` vs `/a/design-system`).
+fn encoded_is_under(encoded: &str, prefix: &str) -> bool {
+    encoded == prefix
+        || (encoded.starts_with(prefix) && encoded[prefix.len()..].starts_with('-'))
+}
+
+/// Encode an absolute path the way Claude names a `projects/` subdirectory:
+/// separators, spaces and dots all become `-`.
+pub fn encode_project_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == ' ' || c == '.' { '-' } else { c })
+        .collect()
 }
 
 /// Recursively collect every `.claude/projects` directory beneath `dir`.
@@ -240,11 +386,7 @@ pub fn discover_plan_files(base_path: &Path) -> Vec<PathBuf> {
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |ext| ext == "md")
-        })
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
         .collect();
     files.sort_by_key(|e| e.file_name());
 
@@ -268,11 +410,7 @@ pub fn discover_todo_files(base_path: &Path) -> Vec<(String, String, PathBuf)> {
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |ext| ext == "json")
-        })
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
         .collect();
     files.sort_by_key(|e| e.file_name());
 
@@ -313,6 +451,18 @@ pub fn extract_text_content(value: &serde_json::Value) -> String {
             parts.join("\n")
         }
         _ => value.to_string(),
+    }
+}
+
+/// Render a JSON value as text for a tool-input column.
+///
+/// A JSON string is unwrapped rather than re-serialised, so a shell command
+/// comes back as the command instead of a quoted, backslash-escaped copy of
+/// it. Anything else is serialised as-is.
+pub fn json_text_or_literal(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -463,50 +613,6 @@ pub fn epoch_ms_to_iso(ms: i64) -> String {
 /// Unix seconds → ISO-8601 UTC (Grok `updates.jsonl` top-level `timestamp`).
 pub fn epoch_secs_to_iso(secs: i64) -> String {
     epoch_ms_to_iso(secs.saturating_mul(1000))
-}
-
-// ─── Codex Discovery Functions ───
-
-/// Discover Codex rollout-*.jsonl transcripts under sessions/YYYY/MM/DD/.
-/// Returns (session_uuid, file_path) tuples sorted by path.
-pub fn discover_codex_rollout_files(base_path: &Path) -> Vec<(String, PathBuf)> {
-    let sessions_dir = base_path.join("sessions");
-    let mut results = Vec::new();
-    if !sessions_dir.is_dir() {
-        return results;
-    }
-    walk_codex(&sessions_dir, &mut results);
-    results.sort_by(|a, b| a.1.cmp(&b.1));
-    results
-}
-
-fn walk_codex(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk_codex(&path, out);
-        } else {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("rollout-") && name.ends_with(".jsonl") {
-                // session uuid is the trailing UUID (5 hyphen-delimited groups)
-                // before `.jsonl`.
-                let stem = name.strip_suffix(".jsonl").unwrap_or(&name);
-                let session_uuid = stem
-                    .rsplit('-')
-                    .take(5)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("-");
-                out.push((session_uuid, path));
-            }
-        }
-    }
 }
 
 // ─── Gemini Discovery Functions ───
@@ -679,12 +785,10 @@ pub fn discover_grok_subagent_parents(
                 };
                 let parent = meta
                     .parent_session_id
-                    .or_else(|| {
-                        Some(parent_entry.file_name().to_string_lossy().to_string())
-                    });
-                let child = meta.child_session_id.or_else(|| {
-                    Some(child_entry.file_name().to_string_lossy().to_string())
-                });
+                    .or_else(|| Some(parent_entry.file_name().to_string_lossy().to_string()));
+                let child = meta
+                    .child_session_id
+                    .or_else(|| Some(child_entry.file_name().to_string_lossy().to_string()));
                 if let (Some(p), Some(c)) = (parent, child) {
                     map.insert(c, p);
                 }
@@ -705,9 +809,7 @@ pub fn read_grok_summary(session_dir: &Path) -> Option<crate::types::grok::GrokS
 /// Returns `None` if the file is missing, unreadable, or has no usable usage block.
 /// Callers stamp this onto conversation rows as a session/prompt aggregate (not
 /// per-message); see README Grok field map.
-pub fn read_grok_last_turn_usage(
-    session_dir: &Path,
-) -> Option<crate::types::grok::GrokUsage> {
+pub fn read_grok_last_turn_usage(session_dir: &Path) -> Option<crate::types::grok::GrokUsage> {
     use crate::types::grok::{GrokUpdatesLine, GrokUsage};
     use std::io::{BufRead, BufReader};
 
@@ -743,9 +845,7 @@ pub fn read_grok_last_turn_usage(
 /// Skips noise (hooks, memory flushes). Used to fill `ConversationRow.timestamp`
 /// so Grok rows look like Claude (ISO string per message) even though
 /// chat_history.jsonl has no time fields.
-pub fn read_grok_update_timeline(
-    session_dir: &Path,
-) -> Vec<crate::types::grok::GrokTimedEvent> {
+pub fn read_grok_update_timeline(session_dir: &Path) -> Vec<crate::types::grok::GrokTimedEvent> {
     use crate::types::grok::{GrokTimedEvent, GrokUpdatesLine};
     use std::io::{BufRead, BufReader};
 
@@ -869,4 +969,108 @@ pub fn url_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+
+#[cfg(test)]
+mod desktop_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn encoding_collapses_separators_spaces_and_dots() {
+        assert_eq!(
+            encode_project_path(Path::new("/Users/me/Library/Application Support/Claude")),
+            "-Users-me-Library-Application-Support-Claude"
+        );
+        assert_eq!(
+            encode_project_path(Path::new("/Users/me/inframe/.claude/worktrees/design-system")),
+            "-Users-me-inframe--claude-worktrees-design-system"
+        );
+    }
+
+    #[test]
+    fn prefix_match_respects_the_separator_boundary() {
+        let base = encode_project_path(Path::new("/a/design"));
+        assert!(encoded_is_under("-a-design", &base));
+        assert!(encoded_is_under("-a-design-sub", &base));
+        assert!(!encoded_is_under("-a-designsystem", &base));
+        assert!(!encoded_is_under("-a-design2", &base));
+        assert!(!encoded_is_under("-b-design", &base));
+    }
+
+    #[test]
+    fn scan_finds_only_transcripts_whose_cwd_is_inside_the_base() {
+        let tmp = std::env::temp_dir().join(format!("agent_data_scan_{}", std::process::id()));
+        let registry = tmp.join("claude-code-sessions");
+        let projects = tmp.join("projects");
+        let base = Path::new("/Users/me/Library/Application Support/Claude");
+
+        let inside = projects.join("-Users-me-Library-Application-Support-Claude-scratch-workspaces-w1");
+        let sibling = projects.join("-Users-me-Library-Application-Support-Claudex-other");
+        let unrelated = projects.join("-Users-me-Desktop-quackpad");
+        for d in [&inside, &sibling, &unrelated] {
+            std::fs::create_dir_all(d).expect("fixture dir");
+            std::fs::write(d.join("session.jsonl"), "{}\n").expect("fixture file");
+        }
+
+        let found = desktop_files_under(base, &registry, &projects);
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert!(found[0].2.starts_with(&inside));
+
+        assert!(desktop_files_under(Path::new("test/data_claude_desktop"), &registry, &projects).is_empty());
+        assert!(desktop_files_under(Path::new(""), &registry, &projects).is_empty());
+        assert!(desktop_files_under(Path::new("/"), &registry, &projects).is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn registry_matches_main_and_subagent_transcripts() {
+        let tmp = std::env::temp_dir().join(format!("agent_data_registry_{}", std::process::id()));
+        let registry = tmp.join("claude-code-sessions/org/account");
+        let projects = tmp.join("projects");
+        let base = Path::new("/Users/me/Library/Application Support/Claude");
+        let unrelated = projects.join("-Users-me-unrelated");
+        let scratch = projects.join("-Users-me-Library-Application-Support-Claude-scratch");
+
+        std::fs::create_dir_all(&registry).unwrap();
+        std::fs::write(registry.join("local_registered.json"), r#"{"cliSessionId":"registered-session"}"#).unwrap();
+        std::fs::write(registry.join("local_malformed.json"), "{").unwrap();
+        std::fs::write(registry.join("local_without_id.json"), r#"{"title":"no id"}"#).unwrap();
+
+        std::fs::create_dir_all(unrelated.join("registered-session/subagents")).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(unrelated.join("registered-session.jsonl"), "").unwrap();
+        std::fs::write(unrelated.join("registered-session/subagents/agent-child.jsonl"), "").unwrap();
+        std::fs::write(unrelated.join("unregistered-session.jsonl"), "").unwrap();
+        std::fs::write(scratch.join("scratch-session.jsonl"), "").unwrap();
+
+        let found = desktop_files_under(base, &tmp.join("claude-code-sessions"), &projects);
+
+        assert_eq!(found.len(), 3, "got {found:?}");
+        assert!(found.iter().any(|(_, is_agent, p)| !is_agent && p.ends_with("registered-session.jsonl")));
+        assert!(found.iter().any(|(_, is_agent, p)| *is_agent && p.ends_with("agent-child.jsonl")));
+        assert!(found.iter().any(|(_, is_agent, p)| !is_agent && p.ends_with("scratch-session.jsonl")));
+        assert!(!found.iter().any(|(_, _, p)| p.ends_with("unregistered-session.jsonl")));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn desktop_sessions_own_scratch_and_registered_transcripts() {
+        let tmp = std::env::temp_dir().join(format!("agent_data_client_{}", std::process::id()));
+        let base = tmp.join("Claude");
+        std::fs::create_dir_all(base.join("claude-code-sessions/org")).unwrap();
+        std::fs::write(base.join("claude-code-sessions/org/local_a.json"), r#"{"cliSessionId":"registered"}"#).unwrap();
+
+        let desktop = DesktopSessions::at(&base);
+        let scratch = format!("{}-scratch-workspaces-w1", encode_project_path(&base));
+        assert!(desktop.owns(&scratch, Path::new("/p/any/unregistered.jsonl")));
+        assert!(desktop.owns("-Users-me-repo", Path::new("/p/-Users-me-repo/registered.jsonl")));
+        assert!(desktop.owns("-Users-me-repo", Path::new("/p/-Users-me-repo/registered/subagents/agent-1.jsonl")));
+        assert!(!desktop.owns("-Users-me-repo", Path::new("/p/-Users-me-repo/unregistered.jsonl")));
+        assert!(!DesktopSessions::at(Path::new("relative/Claude")).owns(&scratch, Path::new("registered.jsonl")));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

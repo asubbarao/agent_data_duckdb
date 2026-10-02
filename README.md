@@ -1,6 +1,6 @@
 # agent_data — DuckDB Extension for AI Agent Session Data
 
-A [DuckDB extension](https://duckdb.org/community_extensions/list_of_extensions) written in Rust for querying, analysing and inspecting AI coding agents history. Read conversations, plans, todos, history, and usage stats directly from your local agent data directories.
+A [DuckDB extension](https://duckdb.org/community_extensions/list_of_extensions) written in Rust for querying, analysing and inspecting AI coding agents history. Read conversations, plans, todos, history, and usage stats directly from your local agent data directories — or drop to `read_events()` for the raw, lossless JSONL lines behind them.
 
 **Supported agents:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`~/.claude`), Claude Desktop ("Cowork", `~/Library/Application Support/Claude`), [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (`~/.copilot`), [Cursor](https://cursor.com) (`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`, `source='cursor'`), [OpenAI Codex CLI](https://openai.com/codex) (`~/.codex`, `source='codex'`), [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`~/.gemini`) and [xAI Grok CLI](https://x.ai) (`~/.grok`, `source='grok'`).
 
@@ -104,6 +104,7 @@ When called **without arguments**, each function reads from its provider's defau
 | Function | Default path | Detected as |
 |----------|-------------|-------------|
 | `read_conversations()` | `~/.claude` | Claude Code |
+| `read_events()` | `~/.claude` | Claude Code |
 | `read_plans()` | `~/.claude` | Claude Code |
 | `read_todos()` | `~/.claude` | Claude Code |
 | `read_history()` | `~/.claude` | Claude Code |
@@ -120,14 +121,20 @@ FROM read_conversations(path='~/.gemini');  -- detected as Gemini CLI
 ### Available Functions
 
 All functions accept two optional parameters:
-- **`path`** — data directory path (default: `~/.claude`). Auto-detected from folder structure (`local-agent-mode-sessions/` → Claude Desktop, `projects/` → Claude, `session-state/` → Copilot, a `state.vscdb` file → Cursor, `sessions/<YYYY>/` → Codex, `tmp/` + `installation_id` → Gemini CLI, `sessions/<%encoded-cwd>/` → Grok). Grok lives at `~/.grok`, so pass `path='~/.grok'` (or `source='grok'`).
+- **`path`** — data directory path (default: `~/.claude` for legacy no-argument calls; `source='codex'` uses `CODEX_HOME` or `~/.codex`). Auto-detected from folder structure (`local-agent-mode-sessions/` → Claude Desktop, `projects/` → Claude, `session-state/` → Copilot, a `state.vscdb` file → Cursor, `sessions/<YYYY>/` → Codex, `tmp/` + `installation_id` → Gemini CLI, `sessions/<%encoded-cwd>/` → Grok). An explicit Codex path can name its home, sessions directory, or one rollout file. Grok lives at `~/.grok`, so pass `path='~/.grok'` (or `source='grok'`).
 - **`source`** — explicit provider override: `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`. Use when auto-detection fails or for non-standard directory layouts.
+- **`include_archived`** — for Codex directory discovery, include `archived_sessions/` (default `false`).
 
 Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`) as the first column.
 
+> **`read_events()` is the exception to the "empty result" convention.** It is the
+> raw, lossless relation (Claude and Codex only) and it *errors* on an unusable
+> path or an unsupported provider instead of returning zero rows — see
+> [`read_events`](#read_eventspath-source) below.
+
 > **Cursor** support is gated behind the default-on `cursor` cargo feature. It reads `state.vscdb` with a self-contained, pure-Rust, read-only SQLite reader (`src/vscdb.rs`) — no external dependency and no bundled C SQLite, so every target arch (including `windows_amd64_mingw`) builds with negligible size overhead. Build with `--no-default-features` to drop it. Only `read_conversations()` is implemented for Cursor; the other tables return no rows for `source='cursor'`.
 
-> **Codex** conversation data is read **only** from `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. The `~/.codex/*.sqlite` files (app automation / logging / inbox) are intentionally ignored. Codex has no extra build dependencies.
+> **Codex** conversation data is read from active rollouts under `CODEX_HOME` (default `~/.codex`) and, with `include_archived := true`, archived rollouts. `session_index.jsonl` and the versioned state SQLite database enrich titles, thread relationships, and other metadata; transcript reading still works if either index is unavailable. See [the Codex column mapping](docs/codex.md).
 
 > **Grok** has no extra build dependencies. Transcripts live at
 > `~/.grok/sessions/<%encoded-cwd>/<session-uuid>/chat_history.jsonl` with
@@ -141,12 +148,14 @@ Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'co
 
 Reads conversation/event data.
 - **Claude:** JSONL files from `projects/<project>/<session>.jsonl` (including nested sub-agent transcripts at `projects/<project>/<session>/subagents/agent-*.jsonl`)
-- **Claude Desktop:** JSONL files from `local-agent-mode-sessions/**/.claude/projects/<project>/<session>.jsonl` (same schema as Claude Code)
+- **Claude Desktop:** JSONL files from `local-agent-mode-sessions/**/.claude/projects/<project>/<session>.jsonl` (same schema as Claude Code), plus the transcripts a Desktop session writes to `~/.claude/projects/` (its cwd is inside the Desktop directory, or Desktop's `claude-code-sessions/` registry lists it)
 - **Copilot:** JSONL events from `session-state/<uuid>/events.jsonl`
 - **Cursor:** `composerData:*` / `bubbleId:*` rows from `state.vscdb` (read with the pure-Rust `src/vscdb.rs` reader; one composer = one session)
 - **Codex:** JSONL rollout streams from `sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`
 - **Gemini:** JSON chat checkpoints from `tmp/<project-hash>/chats/session-<ts>-<id>.json` (one file = one session; each tool call is also emitted as a `tool_call` row)
 - **Grok:** JSONL transcripts from `sessions/<%encoded-cwd>/<session-uuid>/chat_history.jsonl`, with session metadata from sibling `summary.json`. **Timestamps** and **token** columns come from sibling `updates.jsonl` (wire event stream — chat_history itself has no time/usage fields). Subagent children linked via `…/<parent>/subagents/<child>/meta.json` set `is_agent=true` (and session-level `parent_uuid`).
+
+> **The two Claude sources overlap by design.** A Desktop session that runs Claude Code writes its transcript under `~/.claude/projects/`, so `source = 'claude'` on `~/.claude` returns it too, labelled `client = 'claude-desktop'` against Desktop's default directory (every other Claude Code session is `client = 'claude-code'`). `source = 'claude-desktop'` returns the same records with `client = 'claude-desktop'`. Read one or the other: all Claude sessions from `~/.claude` (filter on `client` to split them), or only Desktop's. A `UNION ALL` of the two counts every Desktop session twice.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -155,7 +164,7 @@ Reads conversation/event data.
 | `project_path` | VARCHAR | Project/working directory path |
 | `project_dir` | VARCHAR | Raw encoded directory name (Claude / Grok cwd dir) |
 | `file_name` | VARCHAR | Source filename |
-| `is_agent` | BOOLEAN | Sub-agent conversation (Claude; Grok via subagent meta linkage) |
+| `is_agent` | BOOLEAN | Legacy provider-specific agent classification; retained for compatibility |
 | `line_number` | BIGINT | Line number within file (1-based) |
 | `message_type` | VARCHAR | See message type mappings below |
 | `uuid` | VARCHAR | Message/event UUID |
@@ -179,6 +188,36 @@ Reads conversation/event data.
 | `stop_reason` | VARCHAR | Claude API stop reason (NULL for Grok) |
 | `reasoning_effort` | VARCHAR | Grok-only: per-message `reasoning_effort` (`low`/`medium`/`high`/…), else session-level `summary.reasoning_effort` backfill; NULL for other sources |
 | `repository` | VARCHAR | GitHub repository (Copilot; Grok from `summary.git_remotes[0]`) |
+| `record_id` | VARCHAR | Provider record identifier when available |
+| `file_path` | VARCHAR | Absolute transcript or store path for every provider |
+| `client` | VARCHAR | Claude client label; Codex's normalized native client when supplied |
+| `byte_offset` | BIGINT | Byte offset of the physical source line (Claude, Codex) |
+| `ordinal` | BIGINT | Zero-based physical line ordinal (Claude, Codex) |
+| `parent_session_id` | VARCHAR | Parent session relationship when the source provides one |
+| `agent_path` | VARCHAR | Structured child-agent path; Claude uses the nested transcript path or flat agent filename |
+| `parse_error` | VARCHAR | Parser diagnostic for a retained unsupported or malformed source record |
+| `raw_event` | VARCHAR | Exact valid UTF-8 JSONL line text without its terminator (Claude, Codex) |
+
+Claude and Claude Desktop retain `file_path`, `byte_offset`, and `ordinal` on
+every non-blank JSONL row, including unsupported and malformed records. For
+valid UTF-8 lines, `raw_event` is the exact line text without its terminator;
+invalid UTF-8 fidelity is available from `read_events()` via `raw_bytes`,
+addressed by `file_path` and `byte_offset`. Malformed JSON remains
+`message_type = '_parse_error'`. Valid unknown types keep their recorded type
+with `parse_status = 'unknown_type'`; a known type with an incompatible payload
+uses `unsupported_schema`. Parser diagnostics remain in `parse_error`.
+Full reads and projections that select `raw_event` or `raw_json` retain
+the source line; projections that omit both avoid retaining the line text while
+preserving the other evidence fields. Nested Claude subagents derive
+`parent_session_id` from `projects/<project>/<parent>/subagents/`; their
+`agent_path` is `<parent>/subagents/agent-*.jsonl`. Flat legacy `agent-*.jsonl`
+files use an explicit `sessionId` as `parent_session_id` when present and leave
+it NULL otherwise. `session_id` keeps its existing file/native behavior.
+
+| `parse_status` | VARCHAR | `ok`; `unknown_type` (a record type the reader does not map, kept whole); `unsupported_schema` (a known type whose payload no longer fits); `invalid_json` |
+| `parse_error` | VARCHAR | Why a record was not `ok` |
+| `raw_json` | VARCHAR | The source record as read: the JSONL line (Gemini: the message object; Cursor: the bubble) |
+| `message_subtype` | VARCHAR | Claude `attachment` rows: the attachment kind (`hook_success`, `queued_command`, ...); NULL elsewhere |
 
 **Message type mappings:**
 
@@ -188,6 +227,8 @@ Reads conversation/event data.
 | `assistant` | `assistant` | `assistant` (from `gemini`) | `assistant` | Assistant response |
 | `system` | — | — | `system` | System prompt |
 | `summary` | — | — | — | Conversation summary |
+| `attachment` | — | — | — | Context Claude Code attached to the turn (hook output, reminders, queued prompts); kind in `message_subtype` |
+| `ai-title` / `custom-title` / `last-prompt` / `pr-link` | — | — | — | Session title, last prompt or PR URL as `message_content` |
 | — | `reasoning` | — | `reasoning` | Assistant reasoning (summary text only) |
 | — | `turn_start` / `turn_end` | — | — | Assistant turn boundaries |
 | — | `tool_start` / `tool_result` | `tool_call` | `tool_call` / `tool_result` | Tool execution events |
@@ -238,6 +279,102 @@ Reads conversation/event data.
 > `updates.jsonl`. The parser walks chat lines and assigns the next matching
 > wire event's ISO time (same `timestamp` column as Claude). No `updates.jsonl`
 > → summary session stamp only.
+
+#### Reading child conversations
+
+`read_conversations()` includes child transcripts. Filter with `is_sub_agent IS TRUE`; no separate reader is needed. This nullable column is appended after existing columns, and `is_agent` keeps its historical behavior.
+
+For Claude Code and Desktop transcripts, `TRUE` comes from native child layout (nested `subagents/` or legacy `agent-*.jsonl`) or `agentId` together with `isSidechain=true`. An explicit `isSidechain=false` establishes a native mainline transcript. Classification applies to every row in the transcript. Nested siblings can share their parent's `session_id`; distinguish them by `file_path` and native agent evidence. A Claude path can name one exact JSONL transcript when `source` is supplied.
+
+For Codex CLI and Desktop, `TRUE` comes from native subagent source metadata, nonempty `parent_thread_id`/`parent_session_id`, or nonempty `agent_path`. Native `cli`, `vscode`, and `app` source channels establish explicit primary/native sessions when child evidence is absent, independent of any external process launch. `FALSE` therefore does not prove a human started the session. `exec` and missing metadata remain `NULL`: a separately launched `codex exec` can be a user task or another agent's child. Retain launching tool events and child transcript IDs to reconstruct those links; a shared working directory does not establish a parent. Other providers return `NULL` for this scoped classification.
+
+```sql
+SELECT source,session_id,parent_session_id,file_path,model,message_content
+FROM read_conversations(path='~/.codex',source='codex')
+WHERE is_sub_agent IS TRUE;
+
+SELECT session_id,parent_session_id,file_path,message_content
+FROM read_conversations(path='~/.claude',source='claude')
+WHERE is_sub_agent IS TRUE;
+```
+
+### `read_events([path (opt)], [source (opt)])`
+
+The **lossless raw JSONL relation**: one row per *physical line* of every
+transcript file, exactly as it sits on disk. Where `read_conversations()`
+normalizes seven providers into one shared schema (and therefore drops whatever
+it has no column for), `read_events()` drops nothing — unknown event types,
+malformed JSON, blank lines and a half-written final line all come back as rows,
+addressed by `file_path` + `line_number` + `byte_offset`.
+
+- **Claude** (`source='claude'`): `projects/<project>/<session>.jsonl`, including nested sub-agent transcripts at `projects/<project>/<session>/subagents/agent-*.jsonl` (same discovery walk as `read_conversations()`)
+- **Codex** (`source='codex'`): `sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`
+
+Other providers are **not** supported by `read_events()` and raise an error
+(use `read_conversations()` for those).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `source` | VARCHAR | `'claude'` or `'codex'` |
+| `session_id` | VARCHAR | File-derived session id (Claude: file stem or parent session directory for subagents; Codex: rollout filename UUID). Event-level ids remain in `raw`; use file/line provenance when they differ. |
+| `file_path` | VARCHAR | Absolute path of the transcript file the line came from |
+| `file_name` | VARCHAR | File name only |
+| `line_number` | BIGINT | 1-based **physical** line number in that file (counts blank and malformed lines) |
+| `byte_offset` | BIGINT | Byte offset of the line's first byte from the start of the file |
+| `byte_length` | BIGINT | Length of the line in **bytes**, excluding its terminator |
+| `line_ending` | VARCHAR | `'LF'`, `'CRLF'`, or NULL when the line has no terminator (final, possibly partial, line) |
+| `raw` | VARCHAR | The line verbatim, terminator excluded — nothing parsed, reordered or re-serialized |
+| `raw_is_exact` | BOOLEAN | `false` if invalid UTF-8 needed U+FFFD in the text representation; `raw_bytes` always retains the original bytes |
+| `is_valid_json` | BOOLEAN | Whether the line parses as JSON |
+| `parse_error` | VARCHAR | The JSON parser's own message when it does not, else NULL |
+| `event_type` | VARCHAR | Top-level `"type"` **verbatim** — no mapping table, so future/unknown types pass through (NULL if absent or non-string) |
+| `timestamp` | VARCHAR | Top-level `"timestamp"` verbatim (NULL if absent or non-string) |
+| `raw_bytes` | BLOB | Exact line bytes, excluding the separately recorded terminator; authoritative even for invalid UTF-8 or embedded NUL |
+
+`event_type` and `timestamp` are conveniences, not a schema: everything else
+stays in `raw`, so nested payloads are queried from there (e.g. with the `json`
+extension).
+
+**Newline handling.** `\n` (reported as `LF`) and `\r\n` (`CRLF`) terminate a
+line; the terminator is excluded from `raw` and from `byte_length` and recorded
+in `line_ending`. A bare `\r` is **not** a terminator and stays inside `raw`. An
+empty line is a row with `raw = ''` and `byte_length = 0`. A file whose last
+line has no terminator — an agent still writing, or a truncated log — yields a
+final row with `line_ending IS NULL`, kept whether or not it parses. Because
+nothing is normalized in `raw_bytes`, it and `line_ending` reconstruct the original bytes.
+For UTF-8 logs (`raw_is_exact` is true on every row), the text form is:
+
+```sql
+SELECT string_agg(
+           raw || CASE line_ending WHEN 'CRLF' THEN chr(13) || chr(10)
+                                   WHEN 'LF'   THEN chr(10)
+                                   ELSE '' END,
+           '' ORDER BY line_number)
+FROM read_events(path='~/.claude')
+WHERE file_path = '...';   -- byte-identical to the file
+```
+
+**Errors.** A raw reader that silently returns nothing is indistinguishable from
+a lossless read of an empty directory, so `read_events()` fails loudly:
+
+| Condition | Behavior |
+|-----------|----------|
+| `path` does not exist / is not a directory | error (`read_events: path '…' does not exist`) |
+| provider is not Claude or Codex (explicit `source` or auto-detected) | error (`read_events: unsupported provider …`) |
+| a transcript or discovery directory cannot be read | error naming the path and the OS error |
+| supported provider, no transcripts found | **0 rows** (an empty tree is a legitimate answer) |
+
+```sql
+-- Which raw lines does the normalized view not account for?
+SELECT file_name, line_number, event_type, parse_error, raw
+FROM read_events(path='~/.codex', source='codex')
+WHERE NOT is_valid_json OR event_type NOT IN ('session_meta', 'turn_context', 'response_item', 'event_msg');
+
+-- Re-read one exact line from disk by its address
+SELECT file_path, byte_offset, byte_length, raw
+FROM read_events(path='~/.claude')
+WHERE session_id = '…' AND line_number = 42;
+```
 
 ### `read_plans([path], [source])`
 
@@ -360,6 +497,10 @@ When a JSONL line or JSON file cannot be parsed, the extension emits a row with:
 - `display = 'Parse error: ...'` (history)
 
 Filter them with `WHERE message_type != '_parse_error'`.
+
+`read_events()` does not summarize parse failures this way: the offending line
+is returned verbatim in `raw` with `is_valid_json = false` and the parser's own
+message in `parse_error`, so the bytes that failed are still inspectable.
 
 ## Examples
 

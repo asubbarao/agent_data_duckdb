@@ -17,59 +17,78 @@ pub struct Plans;
 
 impl Plans {
     fn load_claude_rows(base_path: &std::path::Path) -> Vec<PlanRow> {
-        utils::discover_plan_files(base_path).into_iter().filter_map(|file_path| {
-            let content = std::fs::read_to_string(&file_path).ok()?;
-            let file_size = std::fs::metadata(&file_path).map(|m| m.len() as i64).unwrap_or(0);
-            Some(PlanRow {
-                source: "claude".to_string(),
-                session_id: None,
-                plan_name: file_path.file_stem()?.to_string_lossy().to_string(),
-                file_name: file_path.file_name()?.to_string_lossy().to_string(),
-                file_path: file_path.to_string_lossy().to_string(),
-                content,
-                file_size,
+        utils::discover_plan_files(base_path)
+            .into_iter()
+            .filter_map(|file_path| {
+                let content = std::fs::read_to_string(&file_path).ok()?;
+                let file_size = std::fs::metadata(&file_path)
+                    .map(|m| m.len() as i64)
+                    .unwrap_or(0);
+                Some(PlanRow {
+                    source: "claude".to_string(),
+                    session_id: None,
+                    plan_name: file_path.file_stem()?.to_string_lossy().to_string(),
+                    file_name: file_path.file_name()?.to_string_lossy().to_string(),
+                    file_path: file_path.to_string_lossy().to_string(),
+                    content,
+                    file_size,
+                })
             })
-        }).collect()
+            .collect()
     }
 
     fn load_copilot_rows(base_path: &std::path::Path) -> Vec<PlanRow> {
-        utils::discover_copilot_plan_files(base_path).into_iter().filter_map(|(session_id, file_path)| {
-            let content = std::fs::read_to_string(&file_path).ok()?;
-            let file_size = std::fs::metadata(&file_path).map(|m| m.len() as i64).unwrap_or(0);
-            let workspace = file_path.parent().and_then(|p| utils::read_workspace_yaml(p));
-            let plan_name = workspace.and_then(|w| w.summary).unwrap_or_else(|| session_id.clone());
-            Some(PlanRow {
-                source: "copilot".to_string(),
-                session_id: Some(session_id),
-                plan_name,
-                file_name: file_path.file_name()?.to_string_lossy().to_string(),
-                file_path: file_path.to_string_lossy().to_string(),
-                content,
-                file_size,
+        utils::discover_copilot_plan_files(base_path)
+            .into_iter()
+            .filter_map(|(session_id, file_path)| {
+                let content = std::fs::read_to_string(&file_path).ok()?;
+                let file_size = std::fs::metadata(&file_path)
+                    .map(|m| m.len() as i64)
+                    .unwrap_or(0);
+                let workspace = file_path
+                    .parent()
+                    .and_then(|p| utils::read_workspace_yaml(p));
+                let plan_name = workspace
+                    .and_then(|w| w.summary)
+                    .unwrap_or_else(|| session_id.clone());
+                Some(PlanRow {
+                    source: "copilot".to_string(),
+                    session_id: Some(session_id),
+                    plan_name,
+                    file_name: file_path.file_name()?.to_string_lossy().to_string(),
+                    file_path: file_path.to_string_lossy().to_string(),
+                    content,
+                    file_size,
+                })
             })
-        }).collect()
+            .collect()
     }
 
     /// Grok writes a `plan.md` into each session directory (when plan mode is used).
     fn load_grok_rows(base_path: &std::path::Path) -> Vec<PlanRow> {
-        utils::discover_grok_session_files(base_path).into_iter().filter_map(|(session_id, _cwd, _enc, chat_path)| {
-            let plan_path = chat_path.parent()?.join("plan.md");
-            let content = std::fs::read_to_string(&plan_path).ok()?;
-            let file_size = std::fs::metadata(&plan_path).map(|m| m.len() as i64).unwrap_or(0);
-            let summary = chat_path.parent().and_then(utils::read_grok_summary);
-            let plan_name = summary
-                .and_then(|s| s.generated_title)
-                .unwrap_or_else(|| session_id.clone());
-            Some(PlanRow {
-                source: "grok".to_string(),
-                session_id: Some(session_id),
-                plan_name,
-                file_name: "plan.md".to_string(),
-                file_path: plan_path.to_string_lossy().to_string(),
-                content,
-                file_size,
+        utils::discover_grok_session_files(base_path)
+            .into_iter()
+            .filter_map(|(session_id, _cwd, _enc, chat_path)| {
+                let plan_path = chat_path.parent()?.join("plan.md");
+                let content = std::fs::read_to_string(&plan_path).ok()?;
+                let file_size = std::fs::metadata(&plan_path)
+                    .map(|m| m.len() as i64)
+                    .unwrap_or(0);
+                let summary = chat_path.parent().and_then(utils::read_grok_summary);
+                let plan_name = summary
+                    .and_then(|s| s.generated_title)
+                    .unwrap_or_else(|| session_id.clone());
+                Some(PlanRow {
+                    source: "grok".to_string(),
+                    session_id: Some(session_id),
+                    plan_name,
+                    file_name: "plan.md".to_string(),
+                    file_path: plan_path.to_string_lossy().to_string(),
+                    content,
+                    file_size,
+                })
             })
-        }).collect()
+            .collect()
     }
 }
 

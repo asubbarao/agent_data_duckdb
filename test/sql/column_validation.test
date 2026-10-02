@@ -4,6 +4,18 @@
 
 require agent_data
 
+# Appended parse columns
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'))
+WHERE column_name IN ('parse_status', 'parse_error', 'raw_json', 'message_subtype')
+ORDER BY column_name;
+----
+message_subtype	VARCHAR
+parse_error	VARCHAR
+parse_status	VARCHAR
+raw_json	VARCHAR
+
 # ============================================================
 # Conversations: column type validation via typeof()
 # ============================================================
@@ -289,7 +301,7 @@ cursor	2
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_codex') GROUP BY source ORDER BY source;
 ----
-codex	5
+codex	6
 
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_gemini') GROUP BY source ORDER BY source;
@@ -347,6 +359,13 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_grok') WHERE uuid IS NUL
 ----
 0
 
+# Grok basenames collide (every session is chat_history.jsonl); file_path must not
+query I
+SELECT COUNT(DISTINCT file_path) = COUNT(DISTINCT session_id)
+FROM read_conversations(path='test/data_grok');
+----
+true
+
 # Tokens only on the session that has updates.jsonl turn_completed usage
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
@@ -389,4 +408,3 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
 WHERE reasoning_effort IS NOT NULL;
 ----
 0
-

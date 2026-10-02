@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-10-02T00:00:00Z","payload":{"id":"combined-child","cwd":"/test/combined","source":{"subagent":{"thread_spawn":{"parent_thread_id":"combined-parent"}}}}}
+{"type":"response_item","timestamp":"2026-10-02T00:00:01Z","payload":{"type":"future-item","id":"future-1","text":"keep this source text"}}
+{"type":"response_item","timestamp":"2026-10-02T00:00:02Z","payload":{"type":"message","role":123}}
+{"type":"response_item","timestamp":42,"payload":{"type":"message","role":"assistant","content":[]}}

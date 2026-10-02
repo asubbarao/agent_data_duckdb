@@ -1,0 +1,6 @@
+{"type": "user", "uuid": "raw-u1", "sessionId": "aaaaaaaa-0000-0000-0000-000000000001", "timestamp": "2026-04-01T10:00:00.000Z", "message": {"role": "user", "content": "hello"}}
+{"type": "mystery_future_event", "timestamp": "2026-04-01T10:00:01.000Z", "payload": {"nested": {"deep": [1, 2, {"k": "v"}]}}, "note": "café 🙂"}
+{"type": "assistant", "uuid": "raw-u2", "message": {"role": "assistant", "content":
+
+{"type": "system", "uuid": "raw-u3", "note": "this line is CRLF terminated"}
+{"type": "user", "uuid": "raw-u4", "timestamp": "2026-04-01T10:00:04.000Z", "message": {"role": "user", "content": "no trailing newline"}}

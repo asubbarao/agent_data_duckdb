@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-04-01T11:00:00.000Z","payload":{"id":"aaaaaaaa-0000-0000-0000-000000000002","cwd":"/Users/testuser/project-raw","cli_version":"0.108.0","originator":"Codex CLI"}}
+{"type":"response_item","timestamp":"2026-04-01T11:00:01.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}
+{"type":"quantum_event","timestamp":"2026-04-01T11:00:02.000Z","payload":{"unknown":true,"nested":{"a":[null,false,3.5]}}}
+{"type":"event_msg","timestamp":"2026-04-01T11:00:03.000Z","payload":{"type":"agent_message","message":"this line is CRLF terminated"}}
+
+{"type":"response_item","timestamp":"2026-04-01T11:00:05.000Z","payload":{"type":"mess

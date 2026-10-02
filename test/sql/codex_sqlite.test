@@ -1,0 +1,65 @@
+# name: test/sql/codex_sqlite.test
+# description: Codex session_index.jsonl and version-tolerant SQLite enrichment
+# group: [agent_data]
+
+require agent_data
+
+# session_index is merged before SQLite state. SQLite's non-null columns win,
+# while index-only fields stay available in metadata. The title and update time
+# below exist only in the committed state.sqlite-wal fixture.
+query IIIII
+SELECT slug, session_created_at, session_updated_at, model_provider, archived
+FROM read_conversations(path='test/data_codex_sqlite', source='codex')
+WHERE uuid = 'current-answer';
+----
+WAL-only SQLite title	2026-09-22T08:00:00Z	2026-09-22T09:30:00Z	sqlite-provider	false
+
+query I
+SELECT contains(metadata, 'unknown_index_field')
+FROM read_conversations(path='test/data_codex_sqlite', source='codex')
+WHERE uuid = 'current-answer';
+----
+true
+
+# A committed edge enriches the child session and remains separate from the
+# transcript's own session metadata.
+query IIII
+SELECT parent_session_id, status, agent_path, agent_role
+FROM read_conversations(path='test/data_codex_sqlite', source='codex')
+WHERE uuid = 'current-answer';
+----
+spawn-parent-0000	NULL	/root/sqlite-reviewer	reviewer
+
+# SQLite state is session metadata only. It cannot overwrite a historical turn
+# or make the current turn inherit old model and effort.
+query IIII
+SELECT model, reasoning_effort, turn_id, root_turn_id
+FROM read_conversations(path='test/data_codex_sqlite', source='codex')
+WHERE uuid = 'historical-answer';
+----
+gpt-historical	low	turn-historical	root-historical
+
+query IIII
+SELECT model, reasoning_effort, turn_id, root_turn_id
+FROM read_conversations(path='test/data_codex_sqlite', source='codex')
+WHERE uuid = 'current-answer';
+----
+gpt-current	high	turn-current	root-current
+
+# Older databases with only the compatible id/thread_name/created_at columns
+# still enrich their matching transcript without manufacturing newer fields.
+query IIII
+SELECT slug, session_created_at, session_updated_at IS NULL, model_provider IS NULL
+FROM read_conversations(path='test/data_codex_sqlite', source='codex')
+WHERE uuid = 'legacy-answer';
+----
+Legacy SQLite title	2026-09-21T07:00:00Z	true	true
+
+# A non-SQLite file and a SQLite database without threads are diagnostics, not
+# discovery failures. The diagnostic is attached once to the first output row.
+query III
+SELECT contains(parse_error, 'enrichment unavailable'), contains(parse_error, 'has no threads table'), contains(metadata, 'diagnostics')
+FROM read_conversations(path='test/data_codex_sqlite', source='codex')
+WHERE uuid = 'historical-user';
+----
+1	1	1

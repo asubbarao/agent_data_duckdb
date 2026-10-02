@@ -63,13 +63,15 @@ impl Stats {
 
         by_date
             .into_iter()
-            .map(|(date, (message_count, session_count, tool_call_count))| StatsRow {
-                source: "grok".to_string(),
-                date,
-                message_count,
-                session_count,
-                tool_call_count,
-            })
+            .map(
+                |(date, (message_count, session_count, tool_call_count))| StatsRow {
+                    source: "grok".to_string(),
+                    date,
+                    message_count,
+                    session_count,
+                    tool_call_count,
+                },
+            )
             .collect()
     }
 }
@@ -100,13 +102,18 @@ impl TableFunc for Stats {
                     Ok(c) => c,
                     Err(_) => return Vec::new(),
                 };
-                cache.daily_activity.unwrap_or_default().into_iter().map(|day| StatsRow {
-                    source: "claude".to_string(),
-                    date: day.date.unwrap_or_default(),
-                    message_count: day.message_count.unwrap_or(0),
-                    session_count: day.session_count.unwrap_or(0),
-                    tool_call_count: day.tool_call_count.unwrap_or(0),
-                }).collect()
+                cache
+                    .daily_activity
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|day| StatsRow {
+                        source: "claude".to_string(),
+                        date: day.date.unwrap_or_default(),
+                        message_count: day.message_count.unwrap_or(0),
+                        session_count: day.session_count.unwrap_or(0),
+                        tool_call_count: day.tool_call_count.unwrap_or(0),
+                    })
+                    .collect()
             }
             Provider::Grok => Self::load_grok_rows(&base_path),
             // Only Claude ships stats-cache.json; Grok rolls up signals.json.

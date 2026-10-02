@@ -122,30 +122,62 @@ SELECT COUNT(*) FROM read_stats(path='test/data_copilot');
 0
 
 # ============================================================
-# Unknown source string falls back to auto-detection
+# Unknown source string is an error, not a silent fallback to auto-detection
 # ============================================================
 
-query I
+statement error
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude', source='unknown_garbage');
 ----
-180
+unknown source
 
-query I
+statement error
 SELECT COUNT(*) FROM read_conversations(path='test/data_copilot', source='unknown_garbage');
 ----
-53
+unknown source
 
 # ============================================================
 # Column count validation (correct number of columns)
 # ============================================================
 
-# Conversations: 29 columns (includes reasoning_tokens + reasoning_effort)
+# Conversations: 61 columns; the historic 29 and #30 evidence positions are preserved.
 query I
-SELECT COUNT(*) FROM (
-    SELECT * FROM read_conversations(path='test/data_claude') LIMIT 0
-) sub;
+SELECT COUNT(*) = 61 FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'));
 ----
-0
+true
+
+# Additive file_path: prior ordinals preserved (is_agent stays at position 6);
+# record_id is column 30, file_path column 31 and client column 35.
+query I
+WITH cols AS (
+  SELECT list(column_name) AS names
+  FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude'))
+)
+SELECT names[6] = 'is_agent'
+   AND names[29] = 'repository'
+   AND names[31] = 'file_path'
+   AND names[35] = 'client'
+FROM cols;
+----
+true
+
+# Relative TVF paths yield absolute file_path for every provider fixture
+query I
+WITH providers AS (
+  SELECT * FROM read_conversations(path='test/data_claude')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_claude_desktop')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_copilot')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_codex')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_gemini')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_grok')
+  UNION ALL BY NAME SELECT * FROM read_conversations(path='test/data_cursor')
+)
+SELECT count(file_name) = 0 FROM providers
+WHERE file_path IS NULL OR file_path = ''
+   OR starts_with(file_path, 'test/')
+   OR starts_with(file_path, './')
+   OR NOT ends_with(file_path, file_name);
+----
+true
 
 # ============================================================
 # WHERE filters work correctly

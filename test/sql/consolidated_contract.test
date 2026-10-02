@@ -1,0 +1,26 @@
+# name: test/sql/consolidated_contract.test
+# description: forward-compatible records retain native lineage and exact source evidence
+# group: [agent_data]
+
+require agent_data
+
+query ITTTTTII
+SELECT line_number, message_type, parse_status, session_id, parent_session_id,
+       cwd, is_sub_agent, raw_json = raw_event
+FROM read_conversations(path='test/data_consolidated', source=' CoDeX ')
+ORDER BY line_number;
+----
+2	future-item	unknown_type	combined-child	combined-parent	/test/combined	true	true
+3	response_item	unsupported_schema	combined-child	combined-parent	/test/combined	true	true
+4	response_item	unsupported_schema	combined-child	combined-parent	/test/combined	true	true
+
+# All new record fields are appended after the native child flag.
+query I
+WITH schema AS (
+    SELECT list(column_name) AS names
+    FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_consolidated'))
+)
+SELECT names[58:61] = ['is_sub_agent', 'parse_status', 'raw_json', 'message_subtype']
+FROM schema;
+----
+true

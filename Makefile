@@ -1,4 +1,4 @@
-.PHONY: clean clean_all
+.PHONY: clean clean_all test_build_script
 
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -17,15 +17,39 @@ all: configure debug
 include extension-ci-tools/makefiles/c_api_extensions/base.Makefile
 include extension-ci-tools/makefiles/c_api_extensions/rust.Makefile
 
+# The Rust helper only selects Cargo targets for macOS. Distribution builds for
+# the MinGW artifact must emit a GNU DLL rather than the Windows host target.
+ifeq ($(DUCKDB_PLATFORM),windows_amd64_mingw)
+  TARGET = x86_64-pc-windows-gnu
+  TARGET_INFO = --target $(TARGET)
+  TARGET_PATH = ./target/$(TARGET)
+endif
+
 ifeq ($(TARGET_DUCKDB_VERSION),__AGENT_DATA_AUTO__)
   EFFECTIVE_DUCKDB_GIT_VERSION = $(if $(DUCKDB_GIT_VERSION),$(DUCKDB_GIT_VERSION),$(shell cat configure/duckdb_git_version.txt 2>/dev/null))
   RESOLVE_DUCKDB_METADATA_VERSION = scripts/duckdb_metadata_version.py --duckdb-git-version "$(EFFECTIVE_DUCKDB_GIT_VERSION)" --default "$(DEFAULT_TARGET_DUCKDB_VERSION)"
   override TARGET_DUCKDB_VERSION = $(shell $(PYTHON_VENV_BIN) $(RESOLVE_DUCKDB_METADATA_VERSION) 2>/dev/null || $(PYTHON_BIN) $(RESOLVE_DUCKDB_METADATA_VERSION))
 endif
+
+# SQLLogicTest must load the exact release stamped into the extension metadata.
+ifndef DUCKDB_TEST_VERSION
+ifneq ($(filter v%,$(TARGET_DUCKDB_VERSION)),)
+ifeq ($(findstring -,$(TARGET_DUCKDB_VERSION)),)
+  DUCKDB_TEST_VERSION := $(patsubst v%,%,$(TARGET_DUCKDB_VERSION))
+  DUCKDB_PIP_INSTALL := duckdb==$(DUCKDB_TEST_VERSION)
+endif
+endif
+endif
 check_target_duckdb_version:
 	@test -n "$(TARGET_DUCKDB_VERSION)" || (echo "Could not resolve TARGET_DUCKDB_VERSION" >&2; exit 1)
 
 configure: venv platform extension_version duckdb_git_version
+
+# Artifact identity must follow the current checkout, including incremental builds.
+extension_version:
+	@$(VERSION_COMMAND)
+
+build_extension_with_metadata_debug build_extension_with_metadata_release: extension_version
 
 .PHONY: duckdb_git_version
 duckdb_git_version:
@@ -39,8 +63,17 @@ release: build_extension_library_release build_extension_with_metadata_release
 build_extension_library_debug build_extension_library_release build_extension_with_metadata_debug build_extension_with_metadata_release: check_target_duckdb_version
 
 test: test_debug
-test_debug: test_extension_debug
-test_release: test_extension_release
+test_debug: test_runtime_version test_build_script test_extension_debug
+test_release: test_runtime_version test_build_script test_extension_release
+
+test_build_script:
+	@test_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$test_dir"' EXIT; \
+	rustc --edition=2021 --test build.rs -o "$$test_dir/build_script_tests"; \
+	"$$test_dir/build_script_tests"
+.PHONY: test_runtime_version
+test_runtime_version:
+	@$(PYTHON_VENV_BIN) scripts/test_duckdb_runtime_version.py
 
 clean: clean_build clean_rust
 clean_all: clean_configure clean

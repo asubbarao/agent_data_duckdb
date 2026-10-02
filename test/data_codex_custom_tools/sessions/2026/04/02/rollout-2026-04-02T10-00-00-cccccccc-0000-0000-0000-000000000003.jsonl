@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-04-02T10:00:00.000Z","payload":{"id":"cccccccc-0000-0000-0000-000000000003","cwd":"/Users/testuser/project","cli_version":"0.150.0"}}
+{"type":"response_item","timestamp":"2026-04-02T10:00:01.000Z","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** End Patch","call_id":"call_custom_1"}}
+{"type":"response_item","timestamp":"2026-04-02T10:00:02.000Z","payload":{"type":"custom_tool_call_output","call_id":"call_custom_1","output":"Done!"}}
+{"type":"response_item","timestamp":"2026-04-02T10:00:03.000Z","payload":{"type":"agent_message","content":[{"type":"output_text","text":"Sender: worker-1\nPatch applied."}]}}

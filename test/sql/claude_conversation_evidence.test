@@ -1,0 +1,75 @@
+# name: test/sql/claude_conversation_evidence.test
+# description: Claude normalized rows retain physical source evidence and agent relationships
+# group: [agent_data]
+
+require agent_data
+
+# Four root lines, two nested child lines, and one flat legacy child line.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_claude_evidence');
+----
+7
+
+# Unknown types retain their name; malformed JSON retains its diagnostic.
+query IIII
+SELECT message_type, parse_error IS NOT NULL, raw_event, file_name
+FROM read_conversations(path='test/data_claude_evidence')
+WHERE file_name = 'eeeeeeee-1111-4111-8111-111111111111.jsonl'
+  AND message_type IN ('future-record', '_parse_error')
+ORDER BY line_number;
+----
+future-record	false	{"type":"future-record","sessionId":"eeeeeeee-1111-4111-8111-111111111111","payload":{"keep":[1,"two"]}}	eeeeeeee-1111-4111-8111-111111111111.jsonl
+_parse_error	true	{not-json}	eeeeeeee-1111-4111-8111-111111111111.jsonl
+
+# Every returned row carries the exact non-terminator line, path, and physical address.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_claude_evidence')
+WHERE NOT (raw_event IS NOT NULL AND file_path IS NOT NULL AND byte_offset IS NOT NULL
+           AND ordinal IS NOT NULL AND ordinal = line_number - 1 AND byte_offset >= 0);
+----
+0
+
+# Byte offsets advance by the UTF-8 raw line length plus its LF terminator.
+query I
+WITH rows AS (
+    SELECT *, LEAD(byte_offset) OVER (PARTITION BY file_path ORDER BY line_number) AS next_offset
+    FROM read_conversations(path='test/data_claude_evidence')
+)
+SELECT count(session_id) FROM rows
+WHERE next_offset IS NOT NULL
+  AND next_offset <> byte_offset + strlen(raw_event) + 1;
+----
+0
+
+# Known Claude fields remain populated while evidence is added.
+query IIIIII
+SELECT message_type, model, tool_name, tool_use_id, input_tokens, output_tokens
+FROM read_conversations(path='test/data_claude_evidence')
+WHERE file_name = 'eeeeeeee-1111-4111-8111-111111111111.jsonl'
+  AND message_type = 'assistant';
+----
+assistant	claude-test-model	Read	tool-root	1	2
+
+# Nested child rows join to the directory parent and expose the child transcript path.
+query III
+SELECT DISTINCT session_id, parent_session_id, agent_path
+FROM read_conversations(path='test/data_claude_evidence')
+WHERE file_name = 'agent-child01.jsonl';
+----
+eeeeeeee-1111-4111-8111-111111111111	eeeeeeee-1111-4111-8111-111111111111	eeeeeeee-1111-4111-8111-111111111111/subagents/agent-child01.jsonl
+
+# Flat legacy agents use explicit sessionId as parent; no message-level global id is invented.
+query III
+SELECT DISTINCT session_id, parent_session_id, agent_path
+FROM read_conversations(path='test/data_claude_evidence')
+WHERE file_name = 'agent-legacy01.jsonl';
+----
+eeeeeeee-1111-4111-8111-111111111111	eeeeeeee-1111-4111-8111-111111111111	agent-legacy01.jsonl
+
+# Root rows do not acquire an agent relationship.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_claude_evidence')
+WHERE file_name = 'eeeeeeee-1111-4111-8111-111111111111.jsonl'
+  AND NOT (parent_session_id IS NULL AND agent_path IS NULL);
+----
+0

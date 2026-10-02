@@ -1,0 +1,21 @@
+# name: test/sql/codex_malformed.test
+# description: Codex malformed physical JSONL lines remain source-exact and do not stop later rows
+# group: [agent_data]
+
+require agent_data
+
+# The malformed record is retained byte-for-byte, with its physical position
+# and a parse diagnostic. The valid next record remains independently usable.
+query TTTTT
+SELECT line_number, byte_offset, raw_event, parse_error IS NOT NULL, record_id IS NOT NULL
+FROM read_conversations(path='test/data_codex_malformed', source='codex')
+WHERE message_type = '_parse_error';
+----
+3	262	{"type":"response_item","payload":	true	true
+
+query TTTTT
+SELECT uuid, message_content, turn_id, model, raw_event = '{"type":"response_item","timestamp":"2026-05-04T00:00:03Z","payload":{"id":"after-malformed","type":"message","role":"assistant","content":[{"type":"output_text","text":"Parser resumed after the bad physical line."}]}}'
+FROM read_conversations(path='test/data_codex_malformed', source='codex')
+WHERE uuid = 'after-malformed';
+----
+after-malformed	Parser resumed after the bad physical line.	turn-malformed	gpt-malformed	true

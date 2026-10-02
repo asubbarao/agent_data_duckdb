@@ -1,0 +1,71 @@
+# name: test/sql/source_parsing.test
+# description: the `source` parameter is normalised, authoritative and validated
+# group: [agent_data]
+
+require agent_data
+
+# `_` and spaces are accepted as `-`
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude_desktop');
+----
+8
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='  CLAUDE DESKTOP  ');
+----
+8
+
+# An explicit source is used as given: asking for Claude Code against a
+# Desktop directory returns nothing rather than auto-detecting Desktop
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude');
+----
+0
+
+# An unknown source is a bind-time error naming the valid sources
+statement error
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop', source='claude-desktopp');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_conversations(source='');
+----
+claude-desktop
+
+# Validation applies to every table function
+statement error
+SELECT COUNT(*) FROM read_plans(source='nonsense');
+----
+unknown source
+
+statement error
+SELECT COUNT(*) FROM read_stats(source='nonsense');
+----
+unknown source
+
+# Omitting source still auto-detects
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_desktop');
+----
+8
+
+# `client` names the Claude client; a Claude Code transcript is 'claude-code'
+query TI
+SELECT client, COUNT(DISTINCT session_id) FROM read_conversations(path='test/data_claude', source='claude')
+GROUP BY client;
+----
+claude-code	6
+
+# ... each record once ...
+query I
+SELECT len(array_agg(line_number)) = COUNT(DISTINCT (file_path, line_number))
+FROM read_conversations(path='test/data_claude', source='claude');
+----
+true
+
+# Codex retains #30's native client classification rather than erasing it.
+query T
+SELECT DISTINCT client FROM read_conversations(path='test/data_codex', source='codex');
+----
+cli
