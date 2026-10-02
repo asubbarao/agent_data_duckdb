@@ -225,7 +225,9 @@ a subagent's brief arrives there as `user`. `author` is the derived answer:
 Copilot, Cursor, Gemini and Grok carry no launch evidence, so their `author`
 follows `message_role`. A `codex exec` or `claude -p` run started by a person
 from a shell is still `caller`: the transcript only shows that a program
-supplied the prompt.
+supplied the prompt. Those shell-launched sessions have no native parent
+pointer; `docs/lineage.sql` recovers the caller from the launching session's
+tool call when the brief text or cwd and start time match.
 
 **Message type mappings:**
 
