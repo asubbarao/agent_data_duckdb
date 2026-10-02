@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-09-15T00:31:00.000Z","payload":{"id":"01a0a27a-0000-7000-8000-000000000003","parent_thread_id":"01a0a278-0000-7000-8000-000000000001","cwd":"/Users/testuser/parent","cli_version":"0.154.0","originator":"Codex Desktop","source":{"subagent":{"other":"guardian"}}}}
+{"type":"response_item","timestamp":"2026-09-15T00:31:01.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Approved."}]}}

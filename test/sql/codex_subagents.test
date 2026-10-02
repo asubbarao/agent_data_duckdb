@@ -1,0 +1,25 @@
+# name: test/sql/codex_subagents.test
+# description: Codex sub-agent sessions keep their own session_meta and are flagged is_agent
+# group: [agent_data]
+
+require agent_data
+
+# A sub-agent's session_meta.source is an object; its rows still get cwd,
+# branch and version, is_agent, and the parent session id in parent_uuid.
+# The child rollout replays its parent's session_meta on line 2; the child's
+# own record wins.
+query TITTTTI
+SELECT session_id, is_agent, parent_uuid, cwd, git_branch, version, COUNT(*)
+FROM read_conversations(path='test/data_codex_subagents', source='codex')
+GROUP BY ALL
+ORDER BY session_id;
+----
+01a0a278-0000-7000-8000-000000000001	false	NULL	/Users/testuser/parent	main	0.154.0	2
+01a0a279-0000-7000-8000-000000000002	true	01a0a278-0000-7000-8000-000000000001	/Users/testuser/child	review	0.154.0	2
+01a0a27a-0000-7000-8000-000000000003	true	01a0a278-0000-7000-8000-000000000001	/Users/testuser/parent	NULL	0.154.0	1
+
+# The existing top-level fixture (source "vscode") is not a sub-agent.
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex', source='codex') WHERE is_agent;
+----
+0

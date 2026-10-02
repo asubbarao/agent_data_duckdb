@@ -454,6 +454,7 @@ impl Conversations {
             };
 
             let mut meta = CodexSessionMeta::default();
+            let mut has_own_meta = false;
             let mut current_model: Option<String> = None;
             let mut file_line: i64 = 0;
             // event_msg/{user,agent}_message duplicate the response_item/message
@@ -488,10 +489,15 @@ impl Conversations {
 
                 match parsed.line_type.as_str() {
                     "session_meta" => {
+                        // A forked sub-agent's rollout replays its parent's session_meta
+                        // after its own; keep the record whose id is this file's session.
                         if let Ok(m) =
                             serde_json::from_value::<CodexSessionMeta>(parsed.payload.clone())
                         {
-                            meta = m;
+                            if !has_own_meta {
+                                has_own_meta = m.id.as_deref() == Some(session_uuid.as_str());
+                                meta = m;
+                            }
                         }
                         continue; // not a conversation row
                     }
@@ -553,7 +559,10 @@ impl Conversations {
             session_id: session_uuid.to_string(),
             project_path: meta.cwd.clone().unwrap_or_default(),
             file_name: file_name.to_string(),
+            is_agent: meta.is_subagent(),
             line_number,
+            // Like Grok, a sub-agent's rows carry the parent session id.
+            parent_uuid: meta.parent_session_id(),
             timestamp,
             cwd: meta.cwd.clone(),
             git_branch: git.and_then(|g| g.branch.clone()),

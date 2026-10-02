@@ -155,11 +155,11 @@ Reads conversation/event data.
 | `project_path` | VARCHAR | Project/working directory path |
 | `project_dir` | VARCHAR | Raw encoded directory name (Claude / Grok cwd dir) |
 | `file_name` | VARCHAR | Source filename |
-| `is_agent` | BOOLEAN | Sub-agent conversation (Claude; Grok via subagent meta linkage) |
+| `is_agent` | BOOLEAN | Sub-agent conversation (Claude; Grok via subagent meta linkage; Codex when `session_meta.source` is a `subagent` object) |
 | `line_number` | BIGINT | Line number within file (1-based) |
 | `message_type` | VARCHAR | See message type mappings below |
 | `uuid` | VARCHAR | Message/event UUID |
-| `parent_uuid` | VARCHAR | Parent message/event UUID (Grok: parent session id on subagent rows) |
+| `parent_uuid` | VARCHAR | Parent message/event UUID (Grok and Codex: parent session id on subagent rows) |
 | `timestamp` | VARCHAR | ISO 8601 timestamp (Claude/Copilot per-message; **Grok:** from `updates.jsonl` event clock, else summary session stamp) |
 | `message_role` | VARCHAR | `user`, `assistant`, `tool`, or NULL |
 | `message_content` | VARCHAR | Text content |

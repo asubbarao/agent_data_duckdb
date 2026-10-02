@@ -31,7 +31,26 @@ pub struct CodexSessionMeta {
     pub cli_version: Option<String>,
     pub model_provider: Option<String>,
     pub originator: Option<String>,
-    pub source: Option<String>,
+    /// `"cli"`, `"exec"`, `"vscode"`, ... for a top-level session; an object such
+    /// as `{"subagent": {"thread_spawn": {...}}}` for a sub-agent's session.
+    pub source: Option<serde_json::Value>,
+    pub parent_thread_id: Option<String>,
+}
+
+impl CodexSessionMeta {
+    /// Codex marks the sessions it spawns itself in `source.subagent`.
+    pub fn is_subagent(&self) -> bool {
+        self.source.as_ref().and_then(|s| s.get("subagent")).is_some()
+    }
+
+    pub fn parent_session_id(&self) -> Option<String> {
+        self.parent_thread_id.clone().or_else(|| {
+            self.source.as_ref()?
+                .pointer("/subagent/thread_spawn/parent_thread_id")?
+                .as_str()
+                .map(String::from)
+        })
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
