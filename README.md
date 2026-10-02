@@ -191,9 +191,11 @@ Reads conversation/event data.
 | `byte_offset` | BIGINT | Byte offset of the physical source line (Claude, Codex) |
 | `ordinal` | BIGINT | Zero-based physical line ordinal (Claude, Codex) |
 | `parent_session_id` | VARCHAR | Session that launched this one, when the source records it (Claude nested subagents; Codex `parent_thread_id` / `thread_spawn`) |
+| `client` | VARCHAR | Front end that wrote the session: Claude `entrypoint` (`cli`, `claude-desktop`, `sdk-cli`); Codex `cli`, `desktop`, `exec`, `editor`, `browser` |
 | `agent_path` | VARCHAR | Structured child-agent path; Claude uses the nested transcript path or flat agent filename |
 | `parse_error` | VARCHAR | Parser diagnostic for a retained unsupported or malformed source record |
 | `raw_event` | VARCHAR | Exact valid UTF-8 JSONL line text without its terminator (Claude, Codex) |
+| `author` | VARCHAR | Who wrote the row: `user`, `caller`, `agent`, `tool` or `system` (see below); never NULL |
 
 Claude and Claude Desktop retain `file_path`, `byte_offset`, and `ordinal` on
 every non-blank JSONL row, including unsupported and malformed records. For
@@ -208,6 +210,22 @@ preserving the other evidence fields. Nested Claude subagents derive
 `agent_path` is `<parent>/subagents/agent-*.jsonl`. Flat legacy `agent-*.jsonl`
 files use an explicit `sessionId` as `parent_session_id` when present and leave
 it NULL otherwise. `session_id` keeps its existing file/native behavior.
+
+**Who wrote the row (`author`):** `message_role` is the provider's own role, and
+a subagent's brief arrives there as `user`. `author` is the derived answer:
+
+| `author` | Meaning |
+|----------|---------|
+| `user` | A person typed it (Claude `promptSource` typed/queued, Desktop `turnOrigin = human`, legacy records without flags; Codex interactive threads) |
+| `caller` | Written into the user slot by the program that launched the session: Claude nested subagents and `sdk-cli` (`claude -p`, `turnOrigin = sdk`) turns; Codex child threads (`is_agent`) and `codex exec` runs (`client = exec`), replayed parent prompts included |
+| `agent` | Assistant text, thinking/reasoning, plans and tool calls |
+| `tool` | Tool results (Claude `tool_result`; Codex `*_output` and Desktop tool items whose content is the output) |
+| `system` | Harness and lifecycle records: Claude `system`, `summary`, snapshots, attachments and user-slot records flagged `isMeta`, `isCompactSummary` or `promptSource = system`; Codex `developer` messages, usage/lifecycle events, and user-slot injections wrapped in Codex's fixed envelopes (`<environment_context>`, `# AGENTS.md instructions`, `<turn_aborted>`, …) |
+
+Copilot, Cursor, Gemini and Grok carry no launch evidence, so their `author`
+follows `message_role`. A `codex exec` or `claude -p` run started by a person
+from a shell is still `caller`: the transcript only shows that a program
+supplied the prompt.
 
 **Message type mappings:**
 

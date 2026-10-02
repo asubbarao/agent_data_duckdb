@@ -77,6 +77,9 @@ pub struct ConversationRow {
     parse_error: Option<String>,
     raw_event: Option<String>,
     metadata: Option<String>,
+    /// Who wrote the row: `user`, `caller`, `agent`, `tool` or `system`.
+    /// `message_role` stays the provider's own role; this is the derived answer.
+    author: String,
     // Event-message copies can precede their canonical response_item. Keep the
     // row long enough for later completion/usage correlation, then omit it.
     suppress_output: bool,
@@ -117,7 +120,36 @@ impl Conversations {
             git_branch: base.git_branch.clone(),
             cwd: base.cwd.clone(),
             version: base.version.clone(),
+            client: base.entrypoint.clone(),
+            author: Self::claude_author(message_type, base, is_agent).to_string(),
             ..Default::default()
+        }
+    }
+
+    /// Claude writes the launching program's words into the user slot. The
+    /// record's own flags say which: subagent transcripts and `sdk-cli`
+    /// (`claude -p`) turns are fed by their caller, while `isMeta`,
+    /// compaction summaries and `promptSource = system` are the harness.
+    fn claude_author(message_type: &str, base: &BaseFields, is_agent: bool) -> &'static str {
+        match message_type {
+            "assistant" => "agent",
+            "user" => {
+                let harness = base.is_meta == Some(true)
+                    || base.is_compact_summary == Some(true)
+                    || base.prompt_source.as_deref() == Some("system");
+                let programmatic = is_agent
+                    || base.turn_origin.as_deref() == Some("sdk")
+                    || (base.turn_origin.is_none()
+                        && base.entrypoint.as_deref() == Some("sdk-cli"));
+                if harness {
+                    "system"
+                } else if programmatic {
+                    "caller"
+                } else {
+                    "user"
+                }
+            }
+            _ => "system",
         }
     }
 
@@ -139,6 +171,7 @@ impl Conversations {
             is_agent,
             line_number,
             message_type: message_type.to_string(),
+            author: "system".to_string(),
             ..Default::default()
         }
     }
@@ -202,6 +235,7 @@ impl Conversations {
                             for block in tool_results {
                                 let mut result_row = row.clone();
                                 result_row.message_type = "tool_result".to_string();
+                                result_row.author = "tool".to_string();
                                 result_row.tool_use_id = block.tool_use_id.clone();
                                 result_row.status = block.is_error.map(|is_error| {
                                     if is_error {
@@ -1290,7 +1324,15 @@ impl Conversations {
                 }
             }
             let file_rows = rows.split_off(file_start);
-            rows.extend(file_rows.into_iter().filter(|row| !row.suppress_output));
+            rows.extend(
+                file_rows
+                    .into_iter()
+                    .filter(|row| !row.suppress_output)
+                    .map(|mut row| {
+                        row.author = Self::codex_author(&row).to_string();
+                        row
+                    }),
+            );
             if let Some(first) = rows.get_mut(file_start) {
                 if !discovery_diagnostics.is_empty() {
                     let diagnostics = discovery_diagnostics.join("; ");
@@ -2027,6 +2069,53 @@ impl Conversations {
         merge!(sandbox_policy);
         merge!(runtime_workspace_roots);
         old
+    }
+
+    /// Codex has no per-record flag for text the harness places in the user
+    /// slot; it does wrap each such injection in one of these fixed envelopes.
+    const CODEX_HARNESS_ENVELOPES: [&'static str; 11] = [
+        "<environment_context>",
+        "<user_instructions>",
+        "# AGENTS.md instructions",
+        "<turn_aborted>",
+        "<recommended_plugins>",
+        "<heartbeat>",
+        "<subagent_notification>",
+        "<codex_internal_context>",
+        "<app-context>",
+        "<external_codex_apps_open_page>",
+        "<task-notification>",
+    ];
+
+    /// A Codex session fed by a program (`codex exec`, or a spawned child
+    /// thread) has its user slot written by the caller, never typed.
+    fn codex_author(row: &ConversationRow) -> &'static str {
+        match row.message_type.as_str() {
+            "assistant" | "agent_message" | "reasoning" | "plan" | "function_call"
+            | "custom_tool_call" => "agent",
+            "function_call_output"
+            | "custom_tool_call_output"
+            | "mcp_tool_call"
+            | "dynamic_tool_call"
+            | "command_execution"
+            | "collab_agent_tool_call"
+            | "file_change"
+            | "image_view" => "tool",
+            "user" => {
+                let text = row.message_content.as_deref().unwrap_or("").trim_start();
+                if Self::CODEX_HARNESS_ENVELOPES
+                    .iter()
+                    .any(|envelope| text.starts_with(envelope))
+                {
+                    "system"
+                } else if row.is_agent || row.client.as_deref() == Some("exec") {
+                    "caller"
+                } else {
+                    "user"
+                }
+            }
+            _ => "system",
+        }
     }
 
     fn codex_client(meta: &CodexSessionMeta) -> Option<String> {
@@ -3009,6 +3098,7 @@ impl TableFunc for Conversations {
             vtab::varchar("parse_error"),
             vtab::varchar("raw_event"),
             vtab::varchar("metadata"),
+            vtab::varchar("author"),
         ]
     }
 
@@ -3165,6 +3255,7 @@ impl TableFunc for Conversations {
                 54 => vtab::set_varchar_opt(output, output_col, idx, row.parse_error.as_deref()),
                 55 => vtab::set_varchar_opt(output, output_col, idx, row.raw_event.as_deref()),
                 56 => vtab::set_varchar_opt(output, output_col, idx, row.metadata.as_deref()),
+                57 => vtab::set_varchar(output, output_col, idx, row.author()),
                 _ => unreachable!("unknown conversations column"),
             }
         }
@@ -3241,6 +3332,23 @@ impl TableFunc for Conversations {
         vtab::set_varchar_opt(output, 54, idx, row.parse_error.as_deref());
         vtab::set_varchar_opt(output, 55, idx, row.raw_event.as_deref());
         vtab::set_varchar_opt(output, 56, idx, row.metadata.as_deref());
+        vtab::set_varchar(output, 57, idx, row.author());
+    }
+}
+
+impl ConversationRow {
+    /// Providers without launch evidence (Copilot, Cursor, Gemini, Grok) only
+    /// know the role, so their author follows it.
+    fn author(&self) -> &str {
+        if !self.author.is_empty() {
+            return &self.author;
+        }
+        match self.message_role.as_deref() {
+            Some("user") => "user",
+            Some("assistant") => "agent",
+            Some("tool") => "tool",
+            _ => "system",
+        }
     }
 }
 

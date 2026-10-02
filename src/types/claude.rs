@@ -54,6 +54,18 @@ pub struct BaseFields {
     pub slug: Option<String>,
     #[serde(rename = "gitBranch")]
     pub git_branch: Option<String>,
+    /// Which front end wrote the session: `cli`, `claude-desktop`, `sdk-cli`.
+    pub entrypoint: Option<String>,
+    /// How a user-slot record arrived: `typed`, `queued`, `sdk`, `system`.
+    #[serde(rename = "promptSource")]
+    pub prompt_source: Option<String>,
+    /// `human`, `sdk`, `task_notification`, `peer`.
+    #[serde(rename = "turnOrigin")]
+    pub turn_origin: Option<String>,
+    #[serde(rename = "isMeta")]
+    pub is_meta: Option<bool>,
+    #[serde(rename = "isCompactSummary")]
+    pub is_compact_summary: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
