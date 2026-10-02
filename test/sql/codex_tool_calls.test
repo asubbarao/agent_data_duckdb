@@ -4,8 +4,11 @@
 
 require agent_data
 
+# tool_input holds Codex's text as written: JSON arguments for function_call,
+# freeform input (a script, a multi-line patch) for custom_tool_call.
 query ITTTTTT
-SELECT line_number, message_type, message_role, tool_name, tool_use_id, tool_input, message_content
+SELECT line_number, message_type, message_role, tool_name, tool_use_id,
+       replace(tool_input, chr(10), '|'), message_content
 FROM read_conversations(path='test/data_codex_tools', source='codex')
 ORDER BY line_number;
 ----
@@ -14,6 +17,7 @@ ORDER BY line_number;
 4	custom_tool_call	tool	exec	call_c	const r = await tools.exec_command({cmd: 'ls'});	NULL
 5	custom_tool_call_output	tool	NULL	call_c	NULL	Script completed
 6	agent_message	NULL	NULL	NULL	NULL	Review finished
+7	custom_tool_call	tool	apply_patch	call_p	*** Begin Patch|*** Add File: notes.txt|+hello|*** End Patch	NULL
 
 # function_call arguments are JSON text, not a JSON-encoded string.
 query T
@@ -23,13 +27,16 @@ WHERE message_type = 'function_call';
 ----
 ls
 
-# A tool result joins back to its call through tool_use_id.
-query TT
-SELECT c.tool_name, o.message_content
+# A result joins back to its call through tool_use_id; a call without a
+# result (call_p) keeps its row with no output.
+query TTT
+SELECT c.tool_use_id, c.tool_name, o.message_content
 FROM read_conversations(path='test/data_codex_tools', source='codex') c
-JOIN read_conversations(path='test/data_codex_tools', source='codex') o
+LEFT JOIN read_conversations(path='test/data_codex_tools', source='codex') o
   ON o.tool_use_id = c.tool_use_id AND o.message_type = c.message_type || '_output'
+WHERE c.message_type IN ('function_call', 'custom_tool_call')
 ORDER BY c.line_number;
 ----
-shell	a.txt
-exec	Script completed
+call_f	shell	a.txt
+call_c	exec	Script completed
+call_p	apply_patch	NULL

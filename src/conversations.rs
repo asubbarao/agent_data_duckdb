@@ -617,17 +617,22 @@ impl Conversations {
                         message_role: Some("tool".to_string()),
                         tool_name: item.name.clone(),
                         tool_use_id: item.call_id.clone(),
-                        tool_input: item.arguments.as_ref().or(item.input.as_ref())
-                            .map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string())),
+                        tool_input: item.arguments.as_ref().or(item.input.as_ref()).map(|v| {
+                            v.as_str()
+                                .map(String::from)
+                                .unwrap_or_else(|| v.to_string())
+                        }),
                         ..base
                     }),
-                    Some(kind @ ("function_call_output" | "custom_tool_call_output")) => Some(ConversationRow {
-                        message_type: kind.to_string(),
-                        message_role: Some("tool".to_string()),
-                        tool_use_id: item.call_id.clone(),
-                        message_content: item.output.as_ref().map(utils::extract_text_content),
-                        ..base
-                    }),
+                    Some(kind @ ("function_call_output" | "custom_tool_call_output")) => {
+                        Some(ConversationRow {
+                            message_type: kind.to_string(),
+                            message_role: Some("tool".to_string()),
+                            tool_use_id: item.call_id.clone(),
+                            message_content: item.output.as_ref().map(utils::extract_text_content),
+                            ..base
+                        })
+                    }
                     // A message between agents of one session (multi-agent Codex).
                     Some("agent_message") => Some(ConversationRow {
                         message_type: "agent_message".to_string(),
