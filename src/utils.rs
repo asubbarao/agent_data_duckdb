@@ -283,34 +283,66 @@ pub fn stats_file_path(base_path: &Path) -> PathBuf {
     base_path.join("stats-cache.json")
 }
 
-/// Extract text content from a serde_json::Value that could be a string or array.
+/// Extract text content from a serde_json::Value that could be a string, array,
+/// or nested content block.
 pub fn extract_text_content(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(arr) => {
-            let mut parts = Vec::new();
-            for item in arr {
-                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                    parts.push(text.to_string());
-                } else if item.get("type").and_then(|t| t.as_str()) == Some("image")
-                    && item.get("source").is_some()
-                {
-                    let source = item.get("source").expect("source checked above");
-                    let media_type = source
-                        .get("media_type")
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(extract_text_content)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        serde_json::Value::Object(object) => {
+            if object.get("type").and_then(|value| value.as_str()) == Some("tool_reference") {
+                return format!(
+                    "[tool_reference: {}]",
+                    object
+                        .get("tool_name")
                         .and_then(|value| value.as_str())
-                        .or_else(|| item.get("media_type").and_then(|value| value.as_str()))
-                        .unwrap_or("unknown");
-                    let byte_size = source
-                        .get("data")
-                        .and_then(|value| value.as_str())
-                        .or_else(|| item.get("data").and_then(|value| value.as_str()))
-                        .map(base64_decoded_size)
-                        .unwrap_or(0);
-                    parts.push(format!("[image: {media_type}, {byte_size} bytes]"));
-                }
+                        .unwrap_or("unknown")
+                );
             }
-            parts.join("\n")
+
+            if object.get("type").and_then(|value| value.as_str()) == Some("image") {
+                let Some(source) = object.get("source") else {
+                    return String::new();
+                };
+                let media_type = source
+                    .get("media_type")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| object.get("media_type").and_then(|value| value.as_str()))
+                    .unwrap_or("unknown");
+                let byte_size = source
+                    .get("data")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| object.get("data").and_then(|value| value.as_str()))
+                    .map(base64_decoded_size)
+                    .unwrap_or(0);
+                return format!("[image: {media_type}, {byte_size} bytes]");
+            }
+            if matches!(
+                object.get("type").and_then(|value| value.as_str()),
+                Some("input_image") | Some("output_image") | Some("mcp_resource")
+            ) {
+                return String::new();
+            }
+
+            if let Some(content) = object.get("content") {
+                return extract_text_content(content);
+            }
+            if let Some(text) = object.get("text") {
+                return extract_text_content(text);
+            }
+
+            format!(
+                "[{} block]",
+                object
+                    .get("type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown")
+            )
         }
         _ => value.to_string(),
     }

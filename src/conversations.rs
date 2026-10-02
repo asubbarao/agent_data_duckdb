@@ -211,7 +211,19 @@ impl Conversations {
                                     }
                                 });
                                 result_row.message_content =
-                                    block.content.as_ref().map(utils::extract_text_content);
+                                    block.content.as_ref().map(|content| {
+                                        if matches!(
+                                            content,
+                                            serde_json::Value::String(value) if value.is_empty()
+                                        ) || matches!(
+                                            content,
+                                            serde_json::Value::Array(values) if values.is_empty()
+                                        ) {
+                                            "[empty tool_result]".to_string()
+                                        } else {
+                                            utils::extract_text_content(content)
+                                        }
+                                    });
                                 rows.push(result_row);
                             }
                             rows
