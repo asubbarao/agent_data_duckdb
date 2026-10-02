@@ -162,7 +162,7 @@ Reads conversation/event data.
 | `project_path` | VARCHAR | Project/working directory path |
 | `project_dir` | VARCHAR | Raw encoded directory name (Claude / Grok cwd dir) |
 | `file_name` | VARCHAR | Source filename |
-| `is_agent` | BOOLEAN | Sub-agent conversation (Claude; Grok via subagent meta linkage) |
+| `is_agent` | BOOLEAN | Child session launched in-process by another agent: Claude `subagents/agent-*.jsonl`; Codex threads with any native parent pointer (`source.subagent.*`, `parent_thread_id`, `thread_source = subagent`); Grok via subagent meta linkage |
 | `line_number` | BIGINT | Line number within file (1-based) |
 | `message_type` | VARCHAR | See message type mappings below |
 | `uuid` | VARCHAR | Message/event UUID |
@@ -190,7 +190,7 @@ Reads conversation/event data.
 | `file_path` | VARCHAR | Transcript file path for the physical source line (Claude, Codex) |
 | `byte_offset` | BIGINT | Byte offset of the physical source line (Claude, Codex) |
 | `ordinal` | BIGINT | Zero-based physical line ordinal (Claude, Codex) |
-| `parent_session_id` | VARCHAR | Parent session relationship when the source provides one |
+| `parent_session_id` | VARCHAR | Session that launched this one, when the source records it (Claude nested subagents; Codex `parent_thread_id` / `thread_spawn`) |
 | `agent_path` | VARCHAR | Structured child-agent path; Claude uses the nested transcript path or flat agent filename |
 | `parse_error` | VARCHAR | Parser diagnostic for a retained unsupported or malformed source record |
 | `raw_event` | VARCHAR | Exact valid UTF-8 JSONL line text without its terminator (Claude, Codex) |

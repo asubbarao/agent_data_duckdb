@@ -1379,10 +1379,27 @@ impl Conversations {
                     .map(String::from)
             })
             .or_else(|| Self::json_string(index_metadata, &["agent_role"]));
+        let parent_session_id = meta
+            .parent_thread_id
+            .clone()
+            .or_else(|| {
+                spawn
+                    .and_then(|s| s.get("parent_thread_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .or_else(|| {
+                Self::json_string(index_metadata, &["parent_session_id", "parent_thread_id"])
+            });
+        // Any native parent pointer or `source.subagent` variant (thread_spawn,
+        // guardian review, ...) makes this a child thread, like Claude's
+        // nested subagent transcripts.
         let is_agent = agent_path.is_some()
             || spawn.is_some()
+            || source.and_then(|s| s.get("subagent")).is_some()
             || structured_thread_source.as_deref() == Some("subagent")
-            || meta.thread_source.as_deref() == Some("subagent");
+            || meta.thread_source.as_deref() == Some("subagent")
+            || parent_session_id.is_some();
         ConversationRow {
             source: "codex".to_string(),
             session_id,
@@ -1432,18 +1449,7 @@ impl Conversations {
             agent_role,
             slug: Self::json_string(index_metadata, &["title", "thread_name"])
                 .or_else(|| meta.title.clone()),
-            parent_session_id: meta
-                .parent_thread_id
-                .clone()
-                .or_else(|| {
-                    spawn
-                        .and_then(|s| s.get("parent_thread_id"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .or_else(|| {
-                    Self::json_string(index_metadata, &["parent_session_id", "parent_thread_id"])
-                }),
+            parent_session_id,
             is_agent,
             session_created_at: meta
                 .timestamp

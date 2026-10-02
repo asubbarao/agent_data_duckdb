@@ -1,0 +1,32 @@
+# name: test/sql/codex_lineage_author.test
+# description: Codex child threads are agents like Claude's, whatever native form the parent pointer takes
+# group: [agent_data]
+
+require agent_data
+
+# A TUI root, a spawned child (with the forked replay of the parent's prompt),
+# a guardian review child, a `codex exec` child and a plain user fork.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_codex_lineage', source='codex');
+----
+24
+
+# Every native parent pointer makes a child thread an agent, including the
+# guardian form that carries no thread_spawn. Forks and exec runs are not.
+query IIIIII
+SELECT DISTINCT session_id, is_agent, parent_session_id, forked_from_session_id, client, thread_source
+FROM read_conversations(path='test/data_codex_lineage', source='codex')
+ORDER BY session_id;
+----
+lineage-child	true	lineage-root	lineage-root	cli	subagent
+lineage-exec	false	NULL	NULL	exec	exec
+lineage-fork	false	NULL	lineage-root	cli	cli
+lineage-guardian	true	lineage-root	NULL	desktop	guardian_review
+lineage-root	false	NULL	NULL	cli	cli
+
+# The parent's launch evidence survives for cross-session reconstruction.
+query II
+SELECT tool_name, tool_input LIKE '%codex exec%' FROM read_conversations(path='test/data_codex_lineage', source='codex')
+WHERE uuid = 'item-root-exec';
+----
+shell	true
