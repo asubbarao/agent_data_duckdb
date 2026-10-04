@@ -22,6 +22,19 @@ ifeq ($(TARGET_DUCKDB_VERSION),__AGENT_DATA_AUTO__)
   RESOLVE_DUCKDB_METADATA_VERSION = scripts/duckdb_metadata_version.py --duckdb-git-version "$(EFFECTIVE_DUCKDB_GIT_VERSION)" --default "$(DEFAULT_TARGET_DUCKDB_VERSION)"
   override TARGET_DUCKDB_VERSION = $(shell $(PYTHON_VENV_BIN) $(RESOLVE_DUCKDB_METADATA_VERSION) 2>/dev/null || $(PYTHON_BIN) $(RESOLVE_DUCKDB_METADATA_VERSION))
 endif
+
+# SQLLogicTest must use the same stable DuckDB release as the extension metadata.
+# The shared CI makefile otherwise installs the latest PyPI package, which can
+# reject an extension built for an older release at load time.
+ifndef DUCKDB_TEST_VERSION
+ifneq ($(filter v%,$(TARGET_DUCKDB_VERSION)),)
+ifeq ($(findstring -,$(TARGET_DUCKDB_VERSION)),)
+  DUCKDB_TEST_VERSION := $(patsubst v%,%,$(TARGET_DUCKDB_VERSION))
+  DUCKDB_PIP_INSTALL := duckdb==$(DUCKDB_TEST_VERSION)
+endif
+endif
+endif
+
 check_target_duckdb_version:
 	@test -n "$(TARGET_DUCKDB_VERSION)" || (echo "Could not resolve TARGET_DUCKDB_VERSION" >&2; exit 1)
 
