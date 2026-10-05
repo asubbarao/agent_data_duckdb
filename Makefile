@@ -9,6 +9,14 @@ USE_UNSTABLE_C_API=1
 
 # Target DuckDB version
 DEFAULT_TARGET_DUCKDB_VERSION := v1.5.6
+
+# Pin the Python test venv's DuckDB to the version the extension is built
+# against. Must be set before the ci-tools includes below: DUCKDB_PIP_INSTALL
+# is finalized at include time, so a later assignment would have no effect.
+# Without this, pip installs latest stable and the extension fails to load
+# with a version mismatch on every DuckDB patch release.
+DUCKDB_TEST_VERSION ?= $(patsubst v%,%,$(DEFAULT_TARGET_DUCKDB_VERSION))
+
 TARGET_DUCKDB_VERSION ?= __AGENT_DATA_AUTO__
 
 all: configure debug
