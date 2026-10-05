@@ -1,0 +1,15 @@
+# name: test/sql/codex_dropped_events.test
+# description: Codex MCP tool calls and compaction records become rows instead of being dropped
+# group: [agent_data]
+
+require agent_data
+
+query ITTTTT
+SELECT line_number, message_type, tool_name, tool_use_id, tool_input, message_content
+FROM read_conversations(path='test/data_codex_events', source='codex')
+ORDER BY line_number;
+----
+2	mcp_tool_call	mcp__dev__query	exec-1	{"sql":"SELECT 1"}	1
+3	mcp_tool_call	mcp__dev__query	exec-2	{"sql":"bad"}	tool call failed
+5	compacted	NULL	NULL	NULL	NULL
+6	compacted	NULL	NULL	NULL	Summary of the earlier turns

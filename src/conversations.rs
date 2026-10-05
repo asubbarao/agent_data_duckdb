@@ -653,9 +653,44 @@ impl Conversations {
                         message_content: ev.message.clone(),
                         ..base
                     }),
+                    // MCP calls made from code mode appear only here, never as
+                    // a response_item function_call.
+                    Some("item_completed") => {
+                        let item = parsed.payload.get("item")?;
+                        if item.get("type").and_then(|t| t.as_str()) != Some("McpToolCall") {
+                            return None;
+                        }
+                        let field = |k: &str| item.get(k).and_then(|v| v.as_str()).unwrap_or_default();
+                        let content = item
+                            .get("result")
+                            .and_then(|r| r.get("content"))
+                            .or_else(|| item.get("error").and_then(|e| e.get("message")))
+                            .map(utils::extract_text_content);
+                        Some(ConversationRow {
+                            message_type: "mcp_tool_call".to_string(),
+                            message_role: Some("tool".to_string()),
+                            tool_name: Some(format!("mcp__{}__{}", field("server"), field("tool"))),
+                            tool_use_id: item.get("id").and_then(|v| v.as_str()).map(String::from),
+                            tool_input: item.get("arguments").map(|v| v.to_string()),
+                            message_content: content,
+                            ..base
+                        })
+                    }
                     _ => None,
                 }
             }
+            // The compaction summary itself is encrypted; the row marks where
+            // the history was replaced and keeps any plain-text message.
+            "compacted" => Some(ConversationRow {
+                message_type: "compacted".to_string(),
+                message_content: parsed
+                    .payload
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .filter(|m| !m.is_empty())
+                    .map(String::from),
+                ..base
+            }),
             _ => None,
         }
     }

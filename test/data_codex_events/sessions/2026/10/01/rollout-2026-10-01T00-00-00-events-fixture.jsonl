@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-10-01T00:00:00Z","payload":{"id":"events-fixture","cwd":"/tmp/events","cli_version":"0.1.0","model_provider":"openai"}}
+{"type":"event_msg","timestamp":"2026-10-01T00:00:01Z","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"exec-1","server":"dev","tool":"query","arguments":{"sql":"SELECT 1"},"status":"completed","result":{"content":[{"type":"text","text":"1"}],"isError":false}}}}
+{"type":"event_msg","timestamp":"2026-10-01T00:00:02Z","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"exec-2","server":"dev","tool":"query","arguments":{"sql":"bad"},"status":"failed","error":{"message":"tool call failed"}}}}
+{"type":"event_msg","timestamp":"2026-10-01T00:00:03Z","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"cmd-1"}}}
+{"type":"compacted","timestamp":"2026-10-01T00:00:04Z","payload":{"message":"","replacement_history":[]}}
+{"type":"compacted","timestamp":"2026-10-01T00:00:05Z","payload":{"message":"Summary of the earlier turns","replacement_history":[]}}
