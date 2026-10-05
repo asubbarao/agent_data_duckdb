@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Resolve a data directory path.
@@ -145,7 +146,102 @@ pub fn discover_claude_desktop_files(base_path: &Path) -> Vec<(String, bool, Pat
     for projects_dir in projects_dirs {
         results.extend(discover_project_jsonl_files(&projects_dir));
     }
+    results.extend(discover_desktop_files_in_claude_home(base_path));
+
+    // The two walks should be disjoint, but a symlinked `.claude` would make
+    // them overlap and double every count.
+    let mut seen = HashSet::new();
+    results.retain(|(_, _, path)| seen.insert(path.clone()));
     results
+}
+
+/// Desktop sessions write their JSONL to the ordinary Claude Code location,
+/// `~/.claude/projects/<encoded-cwd>/`, not under `local-agent-mode-sessions/`.
+/// A transcript there is Desktop's when its cwd is inside `base_path` or when
+/// Desktop's session registry lists its session id.
+fn discover_desktop_files_in_claude_home(base_path: &Path) -> Vec<(String, bool, PathBuf)> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+    desktop_files_under(
+        base_path,
+        &base_path.join("claude-code-sessions"),
+        &home.join(".claude").join("projects"),
+    )
+}
+
+fn desktop_files_under(
+    base_path: &Path,
+    registry_dir: &Path,
+    projects_dir: &Path,
+) -> Vec<(String, bool, PathBuf)> {
+    // A relative or empty base encodes to a prefix of every project directory.
+    if !base_path.is_absolute() {
+        return Vec::new();
+    }
+    let prefix = encode_project_path(base_path);
+    if prefix.len() <= 1 || !projects_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let registry_session_ids = discover_desktop_registry_session_ids(registry_dir);
+
+    discover_project_jsonl_files(projects_dir)
+        .into_iter()
+        .filter(|(encoded, _, path)| {
+            encoded_is_under(encoded, &prefix)
+                || registry_session_ids.contains(&fallback_session_id(path))
+        })
+        .collect()
+}
+
+/// Session ids (`cliSessionId`) from Desktop's `claude-code-sessions/**/local_*.json`
+/// registry. Unreadable or malformed files are skipped.
+fn discover_desktop_registry_session_ids(registry_dir: &Path) -> HashSet<String> {
+    let mut session_ids = HashSet::new();
+    collect_desktop_registry_session_ids(registry_dir, &mut session_ids);
+    session_ids
+}
+
+fn collect_desktop_registry_session_ids(dir: &Path, session_ids: &mut HashSet<String>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_desktop_registry_session_ids(&path, session_ids);
+            continue;
+        }
+        let is_registry_file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map_or(false, |name| name.starts_with("local_") && name.ends_with(".json"));
+        if !is_registry_file {
+            continue;
+        }
+        let id = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .and_then(|value| value.get("cliSessionId")?.as_str().map(str::to_string));
+        if let Some(id) = id {
+            session_ids.insert(id);
+        }
+    }
+}
+
+/// Is `encoded` the base directory or inside it? A bare `starts_with` would
+/// let `/a/design` match the sibling `/a/design2`.
+fn encoded_is_under(encoded: &str, prefix: &str) -> bool {
+    encoded == prefix
+        || (encoded.starts_with(prefix) && encoded[prefix.len()..].starts_with('-'))
+}
+
+/// Encode an absolute path the way Claude names a `projects/` subdirectory:
+/// `/`, space and `.` all become `-` (so `/.claude` becomes `--claude`).
+pub fn encode_project_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == ' ' || c == '.' { '-' } else { c })
+        .collect()
 }
 
 /// Recursively collect every `.claude/projects` directory beneath `dir`.
@@ -869,4 +965,123 @@ pub fn url_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+
+#[cfg(test)]
+mod desktop_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn encoding_collapses_separators_spaces_and_dots() {
+        assert_eq!(
+            encode_project_path(Path::new("/Users/me/Library/Application Support/Claude")),
+            "-Users-me-Library-Application-Support-Claude"
+        );
+        // A hidden directory yields a doubled dash, because the '/' before it
+        // and the '.' that starts it both become '-'. This is the real shape
+        // seen in ~/.claude/projects.
+        assert_eq!(
+            encode_project_path(Path::new("/Users/me/inframe/.claude/worktrees/design-system")),
+            "-Users-me-inframe--claude-worktrees-design-system"
+        );
+    }
+
+    #[test]
+    fn prefix_match_respects_the_separator_boundary() {
+        // The sibling case that a bare starts_with gets wrong. Both of these
+        // directory names exist in spirit on this machine: `design` alongside
+        // `design-system`.
+        let base = encode_project_path(Path::new("/a/design"));
+        assert!(encoded_is_under("-a-design", &base));
+        assert!(encoded_is_under("-a-design-sub", &base));
+        assert!(!encoded_is_under("-a-designsystem", &base));
+        assert!(!encoded_is_under("-a-design2", &base));
+        assert!(!encoded_is_under("-b-design", &base));
+    }
+
+    #[test]
+    fn scan_finds_only_transcripts_whose_cwd_is_inside_the_base() {
+        let tmp = std::env::temp_dir().join(format!("agent_data_scan_{}", std::process::id()));
+        let registry = tmp.join("claude-code-sessions");
+        let projects = tmp.join("projects");
+        let base = Path::new("/Users/me/Library/Application Support/Claude");
+
+        // One session whose cwd is inside the Desktop directory, one sibling
+        // that merely shares a prefix, and one unrelated project.
+        let inside = projects.join("-Users-me-Library-Application-Support-Claude-scratch-workspaces-w1");
+        let sibling = projects.join("-Users-me-Library-Application-Support-Claudex-other");
+        let unrelated = projects.join("-Users-me-Desktop-quackpad");
+        for d in [&inside, &sibling, &unrelated] {
+            std::fs::create_dir_all(d).expect("fixture dir");
+            std::fs::write(d.join("session.jsonl"), "{}\n").expect("fixture file");
+        }
+
+        let found = desktop_files_under(base, &registry, &projects);
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert!(found[0].2.starts_with(&inside));
+
+        // A relative base path must scan nothing at all, or `path=''` would
+        // encode to "" and match every directory here.
+        assert!(desktop_files_under(Path::new("test/data_claude_desktop"), &registry, &projects).is_empty());
+        assert!(desktop_files_under(Path::new(""), &registry, &projects).is_empty());
+        assert!(desktop_files_under(Path::new("/"), &registry, &projects).is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn registry_matches_main_and_subagent_transcripts_and_keeps_prefix_fallback() {
+        let tmp = std::env::temp_dir().join(format!("agent_data_registry_{}", std::process::id()));
+        let registry = tmp.join("claude-code-sessions/org/account");
+        let projects = tmp.join("projects");
+        let base = Path::new("/Users/me/Library/Application Support/Claude");
+        let unrelated = projects.join("-Users-me-unrelated");
+        let scratch = projects.join("-Users-me-Library-Application-Support-Claude-scratch");
+
+        std::fs::create_dir_all(&registry).expect("registry dir");
+        std::fs::write(
+            registry.join("local_registered.json"),
+            r#"{"cliSessionId":"registered-session"}"#,
+        )
+        .expect("valid registry file");
+        std::fs::write(registry.join("local_malformed.json"), "{")
+            .expect("malformed registry file");
+        std::fs::write(registry.join("local_without_id.json"), r#"{"title":"no id"}"#)
+            .expect("id-less registry file");
+
+        std::fs::create_dir_all(unrelated.join("registered-session/subagents"))
+            .expect("registered session dirs");
+        std::fs::create_dir_all(&scratch).expect("scratch dir");
+        std::fs::create_dir_all(&unrelated).expect("unrelated dir");
+        std::fs::write(unrelated.join("registered-session.jsonl"), "")
+            .expect("registered transcript");
+        std::fs::write(
+            unrelated.join("registered-session/subagents/agent-child.jsonl"),
+            "",
+        )
+        .expect("registered subagent transcript");
+        std::fs::write(unrelated.join("unregistered-session.jsonl"), "")
+            .expect("unregistered transcript");
+        std::fs::write(scratch.join("scratch-session.jsonl"), "")
+            .expect("scratch transcript");
+
+        let found = desktop_files_under(base, &tmp.join("claude-code-sessions"), &projects);
+
+        assert_eq!(found.len(), 3, "got {found:?}");
+        assert!(found.iter().any(|(_, is_agent, path)| {
+            !is_agent && path.ends_with("registered-session.jsonl")
+        }));
+        assert!(found.iter().any(|(_, is_agent, path)| {
+            *is_agent && path.ends_with("agent-child.jsonl")
+        }));
+        assert!(found.iter().any(|(_, is_agent, path)| {
+            !is_agent && path.ends_with("scratch-session.jsonl")
+        }));
+        assert!(!found
+            .iter()
+            .any(|(_, _, path)| path.ends_with("unregistered-session.jsonl")));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

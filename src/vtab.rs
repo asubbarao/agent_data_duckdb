@@ -131,6 +131,18 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
 
         let path = resolve_path(bind);
         let source = resolve_source(bind);
+        // An explicit source is authoritative: a misspelled name must fail
+        // rather than fall back to auto-detecting some other provider.
+        if let Some(s) = source.as_deref() {
+            if crate::detect::parse_source(s) == crate::detect::Provider::Unknown {
+                return Err(format!(
+                    "unknown source '{}'; expected one of: {}",
+                    s,
+                    crate::detect::SOURCE_NAMES.join(", ")
+                )
+                .into());
+            }
+        }
         Ok(GenericBindData { path, source, rows: Mutex::new(None) })
     }
 

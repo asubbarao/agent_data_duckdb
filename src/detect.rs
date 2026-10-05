@@ -85,6 +85,9 @@ pub fn parse_source(source: &str) -> Provider {
     }
 }
 
+/// Names accepted by the `source` parameter.
+pub const SOURCE_NAMES: &[&str] = &["claude", "claude-desktop", "copilot", "cursor", "codex", "gemini", "grok"];
+
 /// Resolve provider: explicit source overrides auto-detection.
 pub fn resolve_provider(path: &Path, source: Option<&str>) -> Provider {
     if let Some(s) = source {

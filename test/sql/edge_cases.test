@@ -122,18 +122,18 @@ SELECT COUNT(*) FROM read_stats(path='test/data_copilot');
 0
 
 # ============================================================
-# Unknown source string falls back to auto-detection
+# An unknown source string is an error, not auto-detection
 # ============================================================
 
-query I
+statement error
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude', source='unknown_garbage');
 ----
-180
+unknown source 'unknown_garbage'
 
-query I
-SELECT COUNT(*) FROM read_conversations(path='test/data_copilot', source='unknown_garbage');
+statement error
+SELECT COUNT(*) FROM read_stats(path='test/data_copilot', source='claude_desktop');
 ----
-53
+unknown source 'claude_desktop'
 
 # ============================================================
 # Column count validation (correct number of columns)
