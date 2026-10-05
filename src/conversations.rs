@@ -157,6 +157,51 @@ impl Conversations {
         }
     }
 
+    /// `(tool_use_id, content)` of each `tool_result` block in a user message.
+    fn claude_tool_results(msg: &ConversationMessage) -> Vec<(Option<String>, Option<serde_json::Value>)> {
+        let ConversationMessage::User(u) = msg else { return Vec::new() };
+        let Some(serde_json::Value::Array(blocks)) = u.message.as_ref().and_then(|m| m.content.as_ref()) else {
+            return Vec::new();
+        };
+        blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+            .map(|b| {
+                let id = b.get("tool_use_id").and_then(|v| v.as_str()).map(String::from);
+                (id, b.get("content").cloned())
+            })
+            .collect()
+    }
+
+    /// A user line carrying tool results becomes one `tool_result` row per
+    /// block (parallel tool calls put several in one line), plus the user row
+    /// itself only when it also has text.
+    fn split_tool_results(
+        row: ConversationRow,
+        results: Vec<(Option<String>, Option<serde_json::Value>)>,
+    ) -> Vec<ConversationRow> {
+        if results.is_empty() {
+            return vec![row];
+        }
+        let mut out = Vec::new();
+        for (tool_use_id, content) in results {
+            out.push(ConversationRow {
+                message_type: "tool_result".to_string(),
+                message_role: Some("tool".to_string()),
+                tool_use_id,
+                message_content: content
+                    .as_ref()
+                    .map(utils::extract_text_content)
+                    .filter(|text| !text.is_empty()),
+                ..row.clone()
+            });
+        }
+        if row.message_content.as_deref().map_or(false, |text| !text.is_empty()) {
+            out.insert(0, row);
+        }
+        out
+    }
+
     fn load_claude_rows(base_path: &std::path::Path) -> Vec<ConversationRow> {
         let files = utils::discover_conversation_files(base_path);
         Self::load_claude_jsonl_rows("claude", &files)
@@ -200,19 +245,25 @@ impl Conversations {
                     _ => continue,
                 };
 
-                let row = match serde_json::from_str::<ConversationMessage>(&line) {
-                    Ok(msg) => Self::claude_message_to_row(source, msg, project_dir, &file_name, *is_agent, &file_session_id, file_line),
+                let line_rows = match serde_json::from_str::<ConversationMessage>(&line) {
+                    Ok(msg) => {
+                        let results = Self::claude_tool_results(&msg);
+                        let row = Self::claude_message_to_row(source, msg, project_dir, &file_name, *is_agent, &file_session_id, file_line);
+                        Self::split_tool_results(row, results)
+                    }
                     Err(e) => {
                         let mut row = Self::claude_simple_row(source, project_dir, &file_name, *is_agent, &file_session_id, file_line, "_parse_error");
                         row.message_content = Some(format!("Parse error: {}", e));
-                        row
+                        vec![row]
                     }
                 };
 
-                if file_cwd.is_none() && row.cwd.is_some() {
-                    file_cwd = row.cwd.clone();
+                for row in line_rows {
+                    if file_cwd.is_none() && row.cwd.is_some() {
+                        file_cwd = row.cwd.clone();
+                    }
+                    rows.push(row);
                 }
-                rows.push(row);
             }
 
             if let Some(ref cwd) = file_cwd {
@@ -607,7 +658,12 @@ impl Conversations {
                     Some("reasoning") => Some(ConversationRow {
                         message_type: "reasoning".to_string(),
                         message_role: Some("assistant".to_string()),
-                        message_content: item.summary.as_ref().map(utils::extract_text_content),
+                        // An empty summary (`[]`) means no text, not "".
+                        message_content: item
+                            .summary
+                            .as_ref()
+                            .map(utils::extract_text_content)
+                            .filter(|text| !text.is_empty()),
                         ..base
                     }),
                     Some("function_call") => Some(ConversationRow {

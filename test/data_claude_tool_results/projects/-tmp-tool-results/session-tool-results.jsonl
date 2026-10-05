@@ -1,0 +1,3 @@
+{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/tmp/tool-results","timestamp":"2026-10-01T00:00:01Z","message":{"role":"user","content":"human string"}}
+{"type":"user","uuid":"u2","sessionId":"s1","cwd":"/tmp/tool-results","timestamp":"2026-10-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_one","content":"first result"},{"type":"tool_result","tool_use_id":"toolu_two","content":[{"type":"text","text":"second line one"},{"type":"text","text":"second line two"}]}]}}
+{"type":"user","uuid":"u3","sessionId":"s1","cwd":"/tmp/tool-results","timestamp":"2026-10-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_three","content":""}]}}

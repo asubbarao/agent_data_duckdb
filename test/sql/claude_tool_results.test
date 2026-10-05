@@ -1,0 +1,24 @@
+# name: test/sql/claude_tool_results.test
+# description: Claude tool_result blocks become tool_result rows with their id and text; empty Codex reasoning summaries are NULL
+# group: [agent_data]
+
+require agent_data
+
+query ITTTT
+SELECT line_number, message_type, message_role, tool_use_id, replace(message_content, chr(10), '|')
+FROM read_conversations(path='test/data_claude_tool_results', source='claude')
+ORDER BY line_number, tool_use_id NULLS FIRST;
+----
+1	user	user	NULL	human string
+2	tool_result	tool	toolu_one	first result
+2	tool_result	tool	toolu_two	second line one|second line two
+3	tool_result	tool	toolu_three	NULL
+
+query IT
+SELECT line_number, message_content
+FROM read_conversations(path='test/data_codex_reasoning_summary', source='codex')
+WHERE message_type = 'reasoning'
+ORDER BY line_number;
+----
+2	First summary.
+3	NULL
