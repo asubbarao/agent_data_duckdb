@@ -8,10 +8,13 @@ EXTENSION_NAME=agent_data
 USE_UNSTABLE_C_API=1
 
 # Target DuckDB version
-DEFAULT_TARGET_DUCKDB_VERSION := v1.5.5
+DEFAULT_TARGET_DUCKDB_VERSION := v1.5.6
 TARGET_DUCKDB_VERSION ?= __AGENT_DATA_AUTO__
 
 all: configure debug
+
+# Keep the CI test venv on the same DuckDB release the workflow builds
+DUCKDB_TEST_VERSION ?= $(patsubst v%,%,$(DEFAULT_TARGET_DUCKDB_VERSION))
 
 # Include makefiles from DuckDB
 include extension-ci-tools/makefiles/c_api_extensions/base.Makefile
