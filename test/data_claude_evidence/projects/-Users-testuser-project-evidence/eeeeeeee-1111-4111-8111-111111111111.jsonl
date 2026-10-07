@@ -1,0 +1,4 @@
+{"type":"user","uuid":"root-user","sessionId":"eeeeeeee-1111-4111-8111-111111111111","cwd":"/Users/testuser/project-evidence","message":{"role":"user","content":"root"}}
+{"type":"future-record","sessionId":"eeeeeeee-1111-4111-8111-111111111111","payload":{"keep":[1,"two"]}}
+{"type":"assistant","uuid":"root-assistant","sessionId":"eeeeeeee-1111-4111-8111-111111111111","message":{"model":"claude-test-model","content":[{"type":"tool_use","id":"tool-root","name":"Read","input":{"file_path":"README.md"}},{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2}}}
+{not-json}

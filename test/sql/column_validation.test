@@ -116,6 +116,120 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_copilot') WHERE message_
 0
 
 # ============================================================
+# NULL pattern validation: Cursor conversations
+# (requires the default-on `cursor` cargo feature)
+# ============================================================
+
+# source is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_cursor') WHERE source IS NULL;
+----
+0
+
+# session_id is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_cursor') WHERE session_id IS NULL;
+----
+0
+
+# message_type is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_cursor') WHERE message_type IS NULL;
+----
+0
+
+# line_number is BIGINT and always positive
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_cursor')
+WHERE typeof(line_number) != 'BIGINT' OR line_number <= 0;
+----
+0
+
+# is_agent is BOOLEAN
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_cursor')
+WHERE typeof(is_agent) != 'BOOLEAN';
+----
+0
+
+# git_branch and version are always NULL for Cursor (not persisted in state.vscdb)
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_cursor')
+WHERE git_branch IS NOT NULL OR version IS NOT NULL;
+----
+0
+
+# ============================================================
+# NULL pattern validation: Codex conversations
+# ============================================================
+
+# source is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex') WHERE source IS NULL;
+----
+0
+
+# session_id is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex') WHERE session_id IS NULL;
+----
+0
+
+# message_type is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex') WHERE message_type IS NULL;
+----
+0
+
+# line_number is BIGINT and always positive
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex')
+WHERE typeof(line_number) != 'BIGINT' OR line_number <= 0;
+----
+0
+
+# uuid is always NULL for Codex (response_items carry no per-message id)
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex') WHERE uuid IS NOT NULL;
+----
+0
+
+# ============================================================
+# NULL pattern validation: Gemini conversations
+# ============================================================
+
+# source is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_gemini') WHERE source IS NULL;
+----
+0
+
+# session_id is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_gemini') WHERE session_id IS NULL;
+----
+0
+
+# message_type is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_gemini') WHERE message_type IS NULL;
+----
+0
+
+# is_agent is BOOLEAN
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_gemini')
+WHERE typeof(is_agent) != 'BOOLEAN';
+----
+0
+
+# line_number always positive
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_gemini') WHERE line_number <= 0;
+----
+0
+
+# ============================================================
 # Plans: file_size consistency
 # ============================================================
 
@@ -160,20 +274,35 @@ true
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_claude') GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 
 query II
 SELECT source, COUNT(*) FROM read_conversations(path='test/data_copilot') GROUP BY source ORDER BY source;
 ----
 copilot	53
 
-# GROUP BY message_type on Claude produces 4 groups
+query II
+SELECT source, COUNT(*) FROM read_conversations(path='test/data_cursor') GROUP BY source ORDER BY source;
+----
+cursor	2
+
+query II
+SELECT source, COUNT(*) FROM read_conversations(path='test/data_codex') GROUP BY source ORDER BY source;
+----
+codex	6
+
+query II
+SELECT source, COUNT(*) FROM read_conversations(path='test/data_gemini') GROUP BY source ORDER BY source;
+----
+gemini	11
+
+# GROUP BY message_type on Claude produces 5 groups, including thinking
 query I
 SELECT COUNT(*) FROM (
     SELECT message_type FROM read_conversations(path='test/data_claude') GROUP BY message_type
 );
 ----
-4
+5
 
 # GROUP BY message_type on Copilot produces 16 groups
 query I
@@ -182,3 +311,81 @@ SELECT COUNT(*) FROM (
 );
 ----
 16
+
+# ============================================================
+# NULL pattern validation: Grok conversations
+# ============================================================
+
+# source is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok') WHERE source IS NULL;
+----
+0
+
+# session_id is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok') WHERE session_id IS NULL;
+----
+0
+
+# message_type is never NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok') WHERE message_type IS NULL;
+----
+0
+
+# line_number is BIGINT and always positive
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
+WHERE typeof(line_number) != 'BIGINT' OR line_number <= 0;
+----
+0
+
+# uuid always present (real reasoning.id or synthetic session:line)
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok') WHERE uuid IS NULL;
+----
+0
+
+# Tokens only on the session that has updates.jsonl turn_completed usage
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
+WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+   OR reasoning_tokens IS NOT NULL;
+----
+10
+
+# reasoning_tokens is BIGINT when present (Grok only)
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
+WHERE session_id = 'aaaa1111-0000-0000-0000-000000000001'
+  AND typeof(reasoning_tokens) != 'BIGINT';
+----
+0
+
+# Claude never populates reasoning_tokens
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
+WHERE reasoning_tokens IS NOT NULL;
+----
+0
+
+query II
+SELECT source, COUNT(*) FROM read_conversations(path='test/data_grok') GROUP BY source ORDER BY source;
+----
+grok	14
+
+# reasoning_effort is VARCHAR and populated for Grok assistant/tool_call rows
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_grok')
+WHERE typeof(reasoning_effort) != 'VARCHAR'
+  AND reasoning_effort IS NOT NULL;
+----
+0
+
+# Non-Grok sources leave reasoning_effort NULL
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude')
+WHERE reasoning_effort IS NOT NULL;
+----
+0

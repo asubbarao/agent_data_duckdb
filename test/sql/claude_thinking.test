@@ -1,0 +1,21 @@
+# name: test/sql/claude_thinking.test
+# description: Claude assistant thinking blocks with text become separate assistant thinking rows
+# group: [agent_data]
+
+require agent_data
+
+query TTTTT
+SELECT line_number, uuid, message_type, message_role, message_content
+FROM read_conversations(path='test/data_claude_thinking')
+ORDER BY message_type;
+----
+1	assistant-thinking	assistant	assistant	Done.
+1	assistant-thinking	thinking	assistant	I should inspect the fixture first.
+
+# Signature-only thinking blocks do not create rows.
+query I
+SELECT COUNT(*)
+FROM read_conversations(path='test/data_claude_thinking')
+WHERE message_type = 'thinking';
+----
+1

@@ -1,0 +1,14 @@
+{"type":"session_meta","timestamp":"2026-10-02T10:00:00Z","payload":{"id":"lineage-root","timestamp":"2026-10-02T10:00:00Z","cwd":"/work/project","originator":"codex-tui","cli_version":"0.120.0","source":"cli","thread_source":"user","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-10-02T10:00:01Z","payload":{"turn_id":"turn-root-1","model":"gpt-test","cwd":"/work/project","effort":"medium"}}
+{"type":"response_item","timestamp":"2026-10-02T10:00:02Z","payload":{"id":"item-root-agents","type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /work/project\n\n<INSTRUCTIONS>\nRun tests.\n</INSTRUCTIONS>"}]}}
+{"type":"response_item","timestamp":"2026-10-02T10:00:02Z","payload":{"id":"item-root-env","type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/work/project</cwd>\n</environment_context>"}]}}
+{"type":"response_item","timestamp":"2026-10-02T10:00:02Z","payload":{"id":"item-root-dev","type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>none</skills_instructions>"}]}}
+{"type":"response_item","timestamp":"2026-10-02T10:00:03Z","payload":{"id":"item-root-user","type":"message","role":"user","content":[{"type":"input_text","text":"Spawn a worker to fix the flaky test, then run the exec child."}]}}
+{"type":"response_item","timestamp":"2026-10-02T10:00:04Z","payload":{"id":"item-root-reasoning","type":"reasoning","summary":[{"type":"summary_text","text":"Plan the delegation."}]}}
+{"type":"response_item","timestamp":"2026-10-02T10:00:05Z","payload":{"id":"item-root-spawn","type":"function_call","name":"spawn_agent","call_id":"call-spawn-1","arguments":"{\"message\":\"Fix the flaky test and report.\"}"}}
+{"type":"response_item","timestamp":"2026-10-02T10:00:06Z","payload":{"id":"item-root-spawn-out","type":"function_call_output","call_id":"call-spawn-1","output":"{\"agent_id\":\"lineage-child\"}"}}
+{"type":"response_item","timestamp":"2026-10-02T10:02:50Z","payload":{"id":"item-root-exec","type":"function_call","name":"shell","call_id":"call-exec-1","arguments":"{\"command\":[\"bash\",\"-lc\",\"codex exec -C /work/project - <<'EOF'\\nAudit the migration and report.\\nEOF\"]}"}}
+{"type":"response_item","timestamp":"2026-10-02T10:04:00Z","payload":{"id":"item-root-exec-out","type":"function_call_output","call_id":"call-exec-1","output":"Audit complete."}}
+{"type":"response_item","timestamp":"2026-10-02T10:04:01Z","payload":{"id":"item-root-answer","type":"message","role":"assistant","content":[{"type":"output_text","text":"Both children finished."}]}}
+{"type":"event_msg","timestamp":"2026-10-02T10:04:02Z","payload":{"type":"task_complete","last_agent_message":"Both children finished."}}
+{"type":"event_msg","timestamp":"2026-10-02T10:04:03Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":5}}}}

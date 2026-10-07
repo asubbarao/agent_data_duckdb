@@ -19,6 +19,27 @@ pub enum ConversationMessage {
     Summary(SummaryMessage),
 }
 
+/// Claude adds transcript record types independently of this reader. Keep the
+/// typed parsing for records we understand, but retain any valid object with a
+/// string `type` as an ordinary record instead of turning it into a parse
+/// error.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum ConversationRecord {
+    Known(ConversationMessage),
+    Unknown(UnknownMessage),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UnknownMessage {
+    #[serde(rename = "type")]
+    pub record_type: String,
+    #[serde(flatten)]
+    pub base: BaseFields,
+    pub attachment: Option<serde_json::Value>,
+    pub rendered: Option<serde_json::Value>,
+}
+
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct BaseFields {
@@ -33,6 +54,18 @@ pub struct BaseFields {
     pub slug: Option<String>,
     #[serde(rename = "gitBranch")]
     pub git_branch: Option<String>,
+    /// Which front end wrote the session: `cli`, `claude-desktop`, `sdk-cli`.
+    pub entrypoint: Option<String>,
+    /// How a user-slot record arrived: `typed`, `queued`, `sdk`, `system`.
+    #[serde(rename = "promptSource")]
+    pub prompt_source: Option<String>,
+    /// `human`, `sdk`, `task_notification`, `peer`.
+    #[serde(rename = "turnOrigin")]
+    pub turn_origin: Option<String>,
+    #[serde(rename = "isMeta")]
+    pub is_meta: Option<bool>,
+    #[serde(rename = "isCompactSummary")]
+    pub is_compact_summary: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -44,6 +77,26 @@ pub struct UserMessage {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UserMessageContent {
+    pub content: Option<UserContent>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum UserContent {
+    Text(String),
+    Blocks(Vec<UserContentBlock>),
+    Other(serde_json::Value),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UserContentBlock {
+    #[serde(rename = "type")]
+    pub block_type: Option<String>,
+    pub text: Option<String>,
+    #[serde(rename = "tool_use_id")]
+    pub tool_use_id: Option<String>,
+    pub is_error: Option<bool>,
+    pub source: Option<serde_json::Value>,
     pub content: Option<serde_json::Value>,
 }
 
@@ -68,7 +121,7 @@ pub enum ContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]
-    Thinking {},
+    Thinking { thinking: Option<String> },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: Option<String>,

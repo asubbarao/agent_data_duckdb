@@ -1,11 +1,16 @@
+pub mod codex_discovery;
+pub mod codex_index;
 mod conversations;
 mod detect;
+mod events;
 mod history;
 mod plans;
 mod stats;
 mod todos;
 mod types;
 mod utils;
+#[cfg(feature = "cursor")]
+mod vscdb;
 mod vtab;
 
 use duckdb::{duckdb_entrypoint_c_api, Connection, Result};
@@ -16,6 +21,8 @@ use vtab::GenericVTab;
 pub unsafe fn extension_entrypoint(con: Connection) -> Result<(), Box<dyn Error>> {
     con.register_table_function::<GenericVTab<conversations::Conversations>>("read_conversations")
         .expect("Failed to register read_conversations");
+    con.register_table_function::<GenericVTab<events::Events>>("read_events")
+        .expect("Failed to register read_events");
     con.register_table_function::<GenericVTab<plans::Plans>>("read_plans")
         .expect("Failed to register read_plans");
     con.register_table_function::<GenericVTab<todos::Todos>>("read_todos")

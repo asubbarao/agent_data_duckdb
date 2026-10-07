@@ -1,0 +1,89 @@
+# name: test/sql/claude_lineage_author.test
+# description: author answers "who wrote this row" for Claude; message_role stays the raw role
+# group: [agent_data]
+
+require agent_data
+
+# One interactive root, its nested subagent, an sdk-cli (claude -p) session and
+# a Desktop session.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_claude_lineage');
+----
+21
+
+query II
+SELECT author, count(session_id) FROM read_conversations(path='test/data_claude_lineage')
+GROUP BY author ORDER BY author;
+----
+agent	7
+caller	2
+system	6
+tool	2
+user	4
+
+# Typed and queued prompts are the person's words; isMeta, compaction summaries
+# and promptSource=system records are the harness even though their role is user.
+query II
+SELECT uuid, author FROM read_conversations(path='test/data_claude_lineage')
+WHERE file_name = '11111111-1111-4111-8111-111111111111.jsonl' AND message_role = 'user'
+ORDER BY line_number;
+----
+root-u1	user
+root-u2	tool
+root-u3	system
+root-u4	system
+root-u5	system
+root-u6	user
+root-u7	user
+
+# Assistant text and thinking are the agent; system and summary records are system.
+query III
+SELECT uuid, message_type, author FROM read_conversations(path='test/data_claude_lineage')
+WHERE file_name = '11111111-1111-4111-8111-111111111111.jsonl' AND message_role IS DISTINCT FROM 'user'
+ORDER BY line_number, message_type;
+----
+root-a1	assistant	agent
+root-a2	assistant	agent
+root-a2	thinking	agent
+root-s1	system	system
+NULL	summary	system
+
+# The subagent's brief sits in the user slot but was written by the calling
+# agent. The subagent keeps its parent and the front end that wrote it.
+query IIIIII
+SELECT uuid, author, message_role, is_agent, parent_session_id, client
+FROM read_conversations(path='test/data_claude_lineage')
+WHERE file_name = 'agent-a1b2c3d4.jsonl' ORDER BY line_number;
+----
+sub-u1	caller	user	true	11111111-1111-4111-8111-111111111111	cli
+sub-u2	system	user	true	11111111-1111-4111-8111-111111111111	cli
+sub-a1	agent	assistant	true	11111111-1111-4111-8111-111111111111	cli
+sub-u3	tool	user	true	11111111-1111-4111-8111-111111111111	cli
+sub-a2	agent	assistant	true	11111111-1111-4111-8111-111111111111	cli
+
+# A `claude -p` (sdk-cli, turnOrigin=sdk) prompt comes from a program; a person
+# typing in Claude Desktop (promptSource=sdk, turnOrigin=human) is still the user.
+query IIII
+SELECT uuid, author, client, is_agent FROM read_conversations(path='test/data_claude_lineage')
+WHERE message_role = 'user' AND file_name IN ('22222222-2222-4222-8222-222222222222.jsonl', '33333333-3333-4333-8333-333333333333.jsonl')
+ORDER BY file_name;
+----
+sdk-u1	caller	sdk-cli	false
+desk-u1	user	claude-desktop	false
+
+# message_role is untouched: every caller row still reads as role user.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_claude_lineage')
+WHERE author = 'caller' AND message_role IS DISTINCT FROM 'user';
+----
+0
+
+# author is never NULL or empty on any provider.
+query I
+SELECT count(*) FROM (
+    SELECT author FROM read_conversations(path='test/data_claude_lineage')
+    UNION ALL SELECT author FROM read_conversations(path='test/data_copilot')
+    UNION ALL SELECT author FROM read_conversations(path='test/data_gemini')
+) WHERE author IS NULL OR author = '';
+----
+0

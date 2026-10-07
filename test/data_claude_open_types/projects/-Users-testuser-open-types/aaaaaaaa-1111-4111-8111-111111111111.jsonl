@@ -1,0 +1,5 @@
+{"type":"attachment","uuid":"attachment-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:00.000Z","attachment":{"name":"notes.txt"}}
+{"type":"atis-latch","uuid":"atis-latch-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:01.000Z","state":"open"}
+{"type":"ai-title","uuid":"ai-title-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:02.000Z","title":"Open records"}
+{"type":"user","uuid":"user-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:03.000Z","message":{"role":"user","content":"hello"}}
+{"type":"assistant","uuid":"assistant-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:04.000Z","message":{"model":"claude-test-model","content":[{"type":"text","text":"hi"}]}}

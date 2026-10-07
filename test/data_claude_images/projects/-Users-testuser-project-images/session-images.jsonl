@@ -1,0 +1,1 @@
+{"type":"user","uuid":"user-image","sessionId":"session-images","timestamp":"2026-04-01T11:10:00.000Z","cwd":"/Users/testuser/project","message":{"role":"user","content":[{"type":"text","text":"Please inspect this screenshot."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"not-secret-fixture-data"}}]}}

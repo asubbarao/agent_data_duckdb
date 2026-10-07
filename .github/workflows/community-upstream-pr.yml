@@ -1,0 +1,46 @@
+name: Community Extension Upstream Publish Reminder
+
+# When a DuckDB release update lands on main, file an issue reminding the
+# maintainer to publish upstream. The actual duckdb/community-extensions PR
+# is opened locally (see the /create-upstream-release skill): a fine-grained
+# PAT cannot write to repos outside the account, and we deliberately avoid
+# storing a broad classic PAT in the repo.
+on:
+  push:
+    branches: [main]
+    paths:
+      - duckdb-release.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  publish-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: File upstream publish issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("duckdb-release.toml","rb"))["duckdb"]["version"])')"
+          title="Publish agent_data for DuckDB ${version} to community-extensions"
+          body="Release ${version} landed on main (${GITHUB_SHA}).
+
+          To publish upstream, run the \`/create-upstream-release\` skill in Claude Code, or manually:
+
+          \`\`\`
+          git checkout main && git pull
+          python3 scripts/prepare_community_extension_pr.py --open-pr --branch bump-agent-data-${GITHUB_SHA:0:12}
+          \`\`\`
+
+          Close this issue once the duckdb/community-extensions PR is open."
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --assignee axsaucedo
+          fi

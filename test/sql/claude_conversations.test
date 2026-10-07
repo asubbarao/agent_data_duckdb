@@ -12,7 +12,7 @@ require agent_data
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude');
 ----
-180
+258
 
 # Distinct session count
 query I
@@ -32,13 +32,13 @@ SELECT COUNT(DISTINCT file_name) FROM read_conversations(path='test/data_claude'
 ----
 12
 
-# Each session has exactly 30 rows (180 / 6)
+# Each session has exactly 43 rows (258 / 6), including thinking rows.
 query I
 SELECT COUNT(DISTINCT session_id) FROM (
     SELECT session_id, COUNT(*) AS cnt
     FROM read_conversations(path='test/data_claude')
     GROUP BY session_id
-    HAVING cnt = 30
+    HAVING cnt = 43
 );
 ----
 6
@@ -57,17 +57,17 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_claude') WHERE source !=
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude', source='claude');
 ----
-180
+258
 
 # ============================================================
 # Message type breakdown (pinned counts)
 # ============================================================
 
-# 4 distinct message types
+# 5 distinct message types, including thinking rows
 query I
 SELECT COUNT(DISTINCT message_type) FROM read_conversations(path='test/data_claude');
 ----
-4
+5
 
 # User messages
 query I
@@ -107,13 +107,13 @@ SELECT COUNT(*) FROM read_conversations(path='test/data_claude') WHERE message_t
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude') WHERE is_agent = true;
 ----
-36
+54
 
 # Non-agent rows count
 query I
 SELECT COUNT(*) FROM read_conversations(path='test/data_claude') WHERE is_agent = false;
 ----
-144
+204
 
 # ============================================================
 # Column NOT NULL invariants
@@ -251,10 +251,10 @@ SELECT COUNT(*) FROM (
 ----
 0
 
-# Line numbers are contiguous per file (max = count per file)
+# Line numbers are contiguous per file (max = distinct line count per file)
 query I
 SELECT COUNT(*) FROM (
-    SELECT file_name, MAX(line_number) AS max_ln, COUNT(*) AS cnt
+    SELECT file_name, MAX(line_number) AS max_ln, COUNT(DISTINCT line_number) AS cnt
     FROM read_conversations(path='test/data_claude')
     GROUP BY file_name
     HAVING max_ln != cnt

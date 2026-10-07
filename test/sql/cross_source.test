@@ -8,7 +8,7 @@ require agent_data
 # UNION ALL counts across sources
 # ============================================================
 
-# Conversations: 180 + 53 = 233
+# Conversations: 258 + 53 = 311
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_claude')
@@ -16,7 +16,7 @@ SELECT COUNT(*) FROM (
     SELECT * FROM read_conversations(path='test/data_copilot')
 );
 ----
-233
+311
 
 # Plans: 4 + 1 = 5
 query I
@@ -59,7 +59,7 @@ SELECT source, COUNT(*) AS cnt FROM (
     SELECT * FROM read_conversations(path='test/data_copilot')
 ) GROUP BY source ORDER BY source;
 ----
-claude	180
+claude	258
 copilot	53
 
 # ============================================================
@@ -154,3 +154,261 @@ SELECT COUNT(DISTINCT source) FROM (
 );
 ----
 2
+
+# ============================================================
+# Cursor participates in cross-source UNION
+# (requires the default-on `cursor` cargo feature)
+# ============================================================
+
+# Conversations across all three sources: 258 + 53 + 2 = 313
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_cursor')
+);
+----
+313
+
+# Source breakdown including Cursor
+query II
+SELECT source, COUNT(*) AS cnt FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_cursor')
+) GROUP BY source ORDER BY source;
+----
+claude	258
+copilot	53
+cursor	2
+
+# Three distinct sources in the conversations UNION
+query I
+SELECT COUNT(DISTINCT source) FROM (
+    SELECT source FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_cursor')
+);
+----
+3
+
+# Cursor session ids do not collide with Claude or Copilot
+query I
+SELECT COUNT(*) FROM (
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_cursor') WHERE session_id != ''
+    INTERSECT
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_copilot') WHERE session_id != ''
+);
+----
+0
+
+# Only Cursor rows carry the state.vscdb file_name
+query I
+SELECT COUNT(DISTINCT source) FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_cursor')
+) WHERE file_name = 'state.vscdb';
+----
+1
+
+# ============================================================
+# Codex participates in cross-source UNION
+# ============================================================
+
+# Conversations across all three sources: 258 + 53 + 6 = 317
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_codex')
+);
+----
+317
+
+# Source breakdown including Codex
+query II
+SELECT source, COUNT(*) AS cnt FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_codex')
+) GROUP BY source ORDER BY source;
+----
+claude	258
+codex	6
+copilot	53
+
+# Three distinct sources in the conversations UNION
+query I
+SELECT COUNT(DISTINCT source) FROM (
+    SELECT source FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_codex')
+);
+----
+3
+
+# Codex session ids do not collide with Claude or Copilot
+query I
+SELECT COUNT(*) FROM (
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_codex') WHERE session_id != ''
+    INTERSECT
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_copilot') WHERE session_id != ''
+);
+----
+0
+
+# Only Codex rows carry the function_call message_type
+query I
+SELECT COUNT(DISTINCT source) FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_codex')
+) WHERE message_type = 'function_call';
+----
+1
+
+# ============================================================
+# Gemini participates in cross-source UNION
+# ============================================================
+
+# Conversations across all three sources: 258 + 53 + 11 = 322
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_gemini')
+);
+----
+322
+
+# Source breakdown including Gemini
+query II
+SELECT source, COUNT(*) AS cnt FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_gemini')
+) GROUP BY source ORDER BY source;
+----
+claude	258
+copilot	53
+gemini	11
+
+# Three distinct sources in the conversations UNION
+query I
+SELECT COUNT(DISTINCT source) FROM (
+    SELECT source FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_gemini')
+);
+----
+3
+
+# Gemini session ids do not collide with Claude or Copilot
+query I
+SELECT COUNT(*) FROM (
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_gemini') WHERE session_id != ''
+    INTERSECT
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_copilot') WHERE session_id != ''
+);
+----
+0
+
+# Only Gemini rows carry the tool_call message_type
+query I
+SELECT COUNT(DISTINCT source) FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_gemini')
+) WHERE message_type = 'tool_call';
+----
+1
+
+
+# ============================================================
+# Grok in a UNION — schema stays compatible across all three sources
+# ============================================================
+
+# Conversations UNION over claude + copilot + grok: 258 + 53 + 14 = 325
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_grok')
+);
+----
+325
+
+# Per-source breakdown including grok
+query II
+SELECT source, COUNT(*) AS cnt FROM (
+    SELECT * FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_conversations(path='test/data_grok')
+) GROUP BY source ORDER BY source;
+----
+claude	258
+copilot	53
+grok	14
+
+# Grok session ids do not collide with claude or copilot
+query I
+SELECT COUNT(*) FROM (
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_grok') WHERE session_id != ''
+    INTERSECT
+    SELECT DISTINCT session_id FROM read_conversations(path='test/data_claude') WHERE session_id != ''
+);
+----
+0
+
+# Plans UNION over claude + copilot + grok: 4 + 1 + 1 = 6
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM read_plans(path='test/data_claude')
+    UNION ALL
+    SELECT * FROM read_plans(path='test/data_copilot')
+    UNION ALL
+    SELECT * FROM read_plans(path='test/data_grok')
+);
+----
+6
+
+# Three distinct sources across the conversations UNION
+query I
+SELECT COUNT(DISTINCT source) FROM (
+    SELECT source FROM read_conversations(path='test/data_claude')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_copilot')
+    UNION ALL
+    SELECT source FROM read_conversations(path='test/data_grok')
+);
+----
+3

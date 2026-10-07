@@ -1,0 +1,91 @@
+# name: test/sql/codex_lineage_author.test
+# description: Codex child threads are agents like Claude's; author separates caller briefs from typed text
+# group: [agent_data]
+
+require agent_data
+
+# A TUI root, a spawned child (with the forked replay of the parent's prompt),
+# a guardian review child, a `codex exec` child and a plain user fork.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_codex_lineage', source='codex');
+----
+24
+
+# Every native parent pointer makes a child thread an agent, including the
+# guardian form that carries no thread_spawn. Forks and exec runs are not.
+query IIIIII
+SELECT DISTINCT session_id, is_agent, parent_session_id, forked_from_session_id, client, thread_source
+FROM read_conversations(path='test/data_codex_lineage', source='codex')
+ORDER BY session_id;
+----
+lineage-child	true	lineage-root	lineage-root	cli	subagent
+lineage-exec	false	NULL	NULL	exec	exec
+lineage-fork	false	NULL	lineage-root	cli	cli
+lineage-guardian	true	lineage-root	NULL	desktop	guardian_review
+lineage-root	false	NULL	NULL	cli	cli
+
+query II
+SELECT author, count(session_id) FROM read_conversations(path='test/data_codex_lineage', source='codex')
+GROUP BY author ORDER BY author;
+----
+agent	9
+caller	4
+system	6
+tool	3
+user	2
+
+# In the root, the typed prompt is the user; AGENTS.md and environment_context
+# arrive in the user slot but are the harness; developer records are system.
+query III
+SELECT uuid, message_role, author FROM read_conversations(path='test/data_codex_lineage', source='codex')
+WHERE session_id = 'lineage-root' AND message_role IN ('user', 'developer')
+ORDER BY line_number;
+----
+item-root-agents	user	system
+item-root-env	user	system
+item-root-dev	developer	system
+item-root-user	user	user
+
+# Reasoning and tool calls are the agent's; outputs are the tool's; lifecycle
+# and usage records are system.
+query III
+SELECT uuid, message_type, author FROM read_conversations(path='test/data_codex_lineage', source='codex')
+WHERE session_id = 'lineage-root' AND message_role IS DISTINCT FROM 'user' AND message_role IS DISTINCT FROM 'developer'
+ORDER BY line_number;
+----
+item-root-reasoning	reasoning	agent
+item-root-spawn	function_call	agent
+item-root-spawn-out	function_call_output	tool
+item-root-exec	function_call	agent
+item-root-exec-out	function_call_output	tool
+item-root-answer	assistant	agent
+NULL	task_complete	system
+NULL	token_usage_total	system
+
+# A spawned child's user slot is written by its caller, replayed parent prompt
+# included. The exec child's brief is also the caller's; its AGENTS.md is not.
+query III
+SELECT session_id, uuid, author FROM read_conversations(path='test/data_codex_lineage', source='codex')
+WHERE message_role = 'user' AND session_id IN ('lineage-child', 'lineage-guardian', 'lineage-exec', 'lineage-fork')
+ORDER BY session_id, line_number;
+----
+lineage-child	item-child-replay	caller
+lineage-child	item-child-brief	caller
+lineage-exec	item-exec-agents	system
+lineage-exec	item-exec-brief	caller
+lineage-fork	item-fork-user	user
+lineage-guardian	item-guardian-user	caller
+
+# message_role is untouched: every caller row still reads as role user.
+query I
+SELECT count(session_id) FROM read_conversations(path='test/data_codex_lineage', source='codex')
+WHERE author = 'caller' AND message_role IS DISTINCT FROM 'user';
+----
+0
+
+# The parent's launch evidence survives for cross-session reconstruction.
+query II
+SELECT tool_name, tool_input LIKE '%codex exec%' FROM read_conversations(path='test/data_codex_lineage', source='codex')
+WHERE uuid = 'item-root-exec';
+----
+shell	true

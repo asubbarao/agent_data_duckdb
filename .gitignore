@@ -24,6 +24,7 @@
 ######################
 *.log
 *.sqlite
+!test/data_codex_sqlite/*.sqlite
 
 # Allow test SQL files
 !test/sql/*.sql
@@ -99,13 +100,23 @@ configure/
 *.duckdb
 
 # AI
-.claude
+.claude/*
+# but keep versioned project skills
+!.claude/skills/
+# but keep the Claude Desktop test fixtures, whose realistic on-disk layout
+# nests transcripts under .claude/projects/
+!test/data_claude_desktop/**
 CLAUDE.md
 AGENTS.md
 copilot_raw
 extension-template
 extension-template-c
 tmp
+# but keep the Gemini CLI test fixtures, whose realistic on-disk layout nests
+# session transcripts under tmp/<project-hash>/chats/ (the bare `tmp` ignore
+# above would otherwise silently exclude the fixture chat files).
+!test/data_gemini/tmp/
+!test/data_gemini/tmp/**
 examples/__marimo__/
 claude_raw
 community-extensions

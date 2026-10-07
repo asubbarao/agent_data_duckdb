@@ -1,0 +1,35 @@
+# name: test/sql/claude_open_types.test
+# description: Claude records with new top-level types remain ordinary rows
+# group: [agent_data]
+
+require agent_data
+
+# Valid unknown records preserve their own type, shared identity fields, and raw JSON.
+query IIII
+SELECT line_number, message_type, uuid, session_id
+FROM read_conversations(path='test/data_claude_open_types')
+ORDER BY line_number;
+----
+1	attachment	attachment-1	aaaaaaaa-1111-4111-8111-111111111111
+2	atis-latch	atis-latch-1	aaaaaaaa-1111-4111-8111-111111111111
+3	ai-title	ai-title-1	aaaaaaaa-1111-4111-8111-111111111111
+4	user	user-1	aaaaaaaa-1111-4111-8111-111111111111
+5	assistant	assistant-1	aaaaaaaa-1111-4111-8111-111111111111
+
+query IIII
+SELECT message_type, raw_event, parse_error IS NULL, message_role
+FROM read_conversations(path='test/data_claude_open_types')
+WHERE line_number IN (1, 2, 3)
+ORDER BY line_number;
+----
+attachment	{"type":"attachment","uuid":"attachment-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:00.000Z","attachment":{"name":"notes.txt"}}	1	NULL
+atis-latch	{"type":"atis-latch","uuid":"atis-latch-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:01.000Z","state":"open"}	1	NULL
+ai-title	{"type":"ai-title","uuid":"ai-title-1","sessionId":"aaaaaaaa-1111-4111-8111-111111111111","timestamp":"2026-09-30T10:00:02.000Z","title":"Open records"}	1	NULL
+
+# No valid unknown record becomes a parse error.
+query I
+SELECT coalesce(len(array_agg(line_number)), 0)
+FROM read_conversations(path='test/data_claude_open_types')
+WHERE message_type = '_parse_error';
+----
+0

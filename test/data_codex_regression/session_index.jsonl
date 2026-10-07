@@ -1,0 +1,4 @@
+{"id":"cli-native-0001","thread_name":"CLI indexed title","created_at":"2026-05-01T09:00:00Z","updated_at":"2026-05-01T09:10:00Z","model":"gpt-5.4-codex","provider":"openai","project":{"name":"agent-data","path":"/work/agent-data"}}
+{"id":"desktop-native-0002","thread_name":"Desktop indexed title","created_at":"2026-05-02T10:00:00Z","updated_at":"2026-05-02T10:10:00Z","thread_source":"desktop-index","metadata":{"desktop_workspace":"workspace-7"}}
+{"id":"child-native-0003","thread_name":"Review agent","parent_session_id":"cli-native-0001","agent_path":"/root/reviewer","agent_nickname":"reviewer","agent_role":"code_reviewer"}
+{"id":"archived-native-0004","thread_name":"Archived thread","archived":true,"created_at":"2026-04-30T08:00:00Z"}
