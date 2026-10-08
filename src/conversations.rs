@@ -438,11 +438,7 @@ impl Conversations {
         let values: Vec<&serde_json::Value> = match rendered {
             serde_json::Value::Array(entries) => entries
                 .iter()
-                .map(|entry| {
-                    entry
-                        .get("content")
-                        .unwrap_or(entry)
-                })
+                .map(|entry| entry.get("content").unwrap_or(entry))
                 .collect(),
             _ => vec![rendered],
         };
@@ -1352,6 +1348,19 @@ impl Conversations {
             }
         }
         Ok(rows)
+    }
+
+    /// `(session_id, timestamp, message_type, author)` for every active Codex
+    /// rollout row — the facts `read_stats(source := 'codex')` rolls up, read
+    /// through the same loader as `read_conversations` so the counts agree.
+    pub(crate) fn codex_activity(
+        path: Option<&str>,
+    ) -> Vec<(String, Option<String>, String, String)> {
+        Self::load_codex_rows(path, false, false, false)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| (row.session_id, row.timestamp, row.message_type, row.author))
+            .collect()
     }
 
     fn codex_base_row(
@@ -2382,13 +2391,11 @@ impl Conversations {
         let turn_id = Self::codex_turn_id(&parsed.payload);
         let event_type = Self::json_string(&parsed.payload, &["type"])
             .unwrap_or_else(|| parsed.line_type.clone());
-        let matches_terminal = |row: &ConversationRow| {
-            match response_id.as_ref() {
-                Some(id) => row.response_id.as_ref() == Some(id),
-                None => turn_id
-                    .as_ref()
-                    .is_some_and(|id| row.turn_id.as_ref() == Some(id)),
-            }
+        let matches_terminal = |row: &ConversationRow| match response_id.as_ref() {
+            Some(id) => row.response_id.as_ref() == Some(id),
+            None => turn_id
+                .as_ref()
+                .is_some_and(|id| row.turn_id.as_ref() == Some(id)),
         };
         let target = rows
             .iter()
@@ -2397,9 +2404,8 @@ impl Conversations {
                     && matches!(row.message_type.as_str(), "assistant" | "agent_message")
             })
             .or_else(|| {
-                rows.iter().rposition(|row| {
-                    matches_terminal(row) && row.message_type == "reasoning"
-                })
+                rows.iter()
+                    .rposition(|row| matches_terminal(row) && row.message_type == "reasoning")
             });
         if let Some(target) = target {
             let row = &mut rows[target];
@@ -3023,9 +3029,7 @@ impl Conversations {
         let base_path = utils::resolve_data_path(path);
         match detect::resolve_provider(&base_path, source) {
             Provider::Claude => Self::load_claude_rows(&base_path, retain_raw_event),
-            Provider::ClaudeDesktop => {
-                Self::load_claude_desktop_rows(&base_path, retain_raw_event)
-            }
+            Provider::ClaudeDesktop => Self::load_claude_desktop_rows(&base_path, retain_raw_event),
             Provider::Copilot => Self::load_copilot_rows(&base_path),
             Provider::Cursor => Self::load_cursor_rows(&base_path),
             Provider::Codex => Self::load_codex_rows(path, false, true, true).unwrap_or_default(),
@@ -3449,13 +3453,9 @@ mod claude_projection_tests {
     #[test]
     fn claude_projection_controls_raw_event_retention_only() {
         let path = fixture_path();
-        let no_raw = Conversations::try_load_rows_with_projection(
-            Some(&path),
-            Some("claude"),
-            true,
-            &[1],
-        )
-        .unwrap();
+        let no_raw =
+            Conversations::try_load_rows_with_projection(Some(&path), Some("claude"), true, &[1])
+                .unwrap();
         assert!(no_raw.iter().all(|row| row.raw_event.is_none()));
 
         let parse_error = no_raw
@@ -3478,13 +3478,9 @@ mod claude_projection_tests {
         );
 
         let expected = r#"{"type":"user","uuid":"root-user","sessionId":"eeeeeeee-1111-4111-8111-111111111111","cwd":"/Users/testuser/project-evidence","message":{"role":"user","content":"root"}}"#;
-        let raw_projection = Conversations::try_load_rows_with_projection(
-            Some(&path),
-            Some("claude"),
-            true,
-            &[55],
-        )
-        .unwrap();
+        let raw_projection =
+            Conversations::try_load_rows_with_projection(Some(&path), Some("claude"), true, &[55])
+                .unwrap();
         let projected_user = raw_projection
             .iter()
             .find(|row| row.uuid.as_deref() == Some("root-user"))

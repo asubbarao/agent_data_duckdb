@@ -171,6 +171,16 @@ pub struct CodexEventMsg {
     pub last_agent_message: Option<String>,
 }
 
+/// One line of `~/.codex/history.jsonl`: `{session_id, ts, text}`, with `ts`
+/// in Unix seconds.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct CodexHistoryEntry {
+    pub session_id: Option<String>,
+    pub ts: Option<f64>,
+    pub text: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::CodexSessionMeta;

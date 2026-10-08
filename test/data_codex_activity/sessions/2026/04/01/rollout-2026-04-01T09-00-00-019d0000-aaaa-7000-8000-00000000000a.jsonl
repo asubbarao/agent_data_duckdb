@@ -1,0 +1,12 @@
+{"type":"session_meta","timestamp":"2026-04-01T09:00:00.000Z","payload":{"id":"019d0000-aaaa-7000-8000-00000000000a","cwd":"/Users/testuser/alpha","cli_version":"0.120.0","model_provider":"openai","originator":"codex_cli_rs","source":"cli"}}
+{"type":"turn_context","timestamp":"2026-04-01T09:00:00.500Z","payload":{"model":"gpt-5.3-codex","cwd":"/Users/testuser/alpha","effort":"high"}}
+{"type":"response_item","timestamp":"2026-04-01T09:00:00.600Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/Users/testuser/alpha</cwd>\n</environment_context>"}]}}
+{"type":"response_item","timestamp":"2026-04-01T09:00:01.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"List the files."}]}}
+{"type":"event_msg","timestamp":"2026-04-01T09:00:01.100Z","payload":{"type":"user_message","message":"List the files.","kind":"plain"}}
+{"type":"response_item","timestamp":"2026-04-01T09:00:02.000Z","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"ls\"]}","call_id":"call_a1"}}
+{"type":"response_item","timestamp":"2026-04-01T09:00:03.000Z","payload":{"type":"function_call_output","call_id":"call_a1","output":"main.rs"}}
+{"type":"response_item","timestamp":"2026-04-01T09:00:04.000Z","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** End Patch","call_id":"call_a2"}}
+{"type":"response_item","timestamp":"2026-04-01T09:00:05.000Z","payload":{"type":"custom_tool_call_output","call_id":"call_a2","output":"Done"}}
+{"type":"response_item","timestamp":"2026-04-01T09:00:06.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"One file: main.rs."}]}}
+{"type":"event_msg","timestamp":"2026-04-01T09:00:06.100Z","payload":{"type":"agent_message","message":"One file: main.rs."}}
+{"type":"event_msg","timestamp":"2026-04-01T09:00:07.000Z","payload":{"type":"token_count","info":{"total_tokens":42}}}

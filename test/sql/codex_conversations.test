@@ -230,8 +230,8 @@ AND timestamp NOT SIMILAR TO '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]
 0
 
 # ============================================================
-# Other tables return empty for Codex
-# (conversation data lives only in the rollout JSONL stream)
+# Plans/todos return empty for Codex; this fixture has no history.jsonl.
+# read_stats rolls up the rollout (see codex_stats.test).
 # ============================================================
 
 query I
@@ -252,4 +252,4 @@ SELECT COUNT(*) FROM read_history(path='test/data_codex');
 query I
 SELECT COUNT(*) FROM read_stats(path='test/data_codex');
 ----
-0
+1

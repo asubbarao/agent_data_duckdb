@@ -1,0 +1,70 @@
+# name: test/sql/codex_stats.test
+# description: Codex read_stats rolled up from rollouts; read_plans/read_todos empty for Codex
+# group: [agent_data]
+
+require agent_data
+
+# Session A (2026-04-01): harness <environment_context> user message excluded,
+# event_msg copies not double-counted; function_call + custom_tool_call.
+# Session B starts 2026-04-02 23:59Z; its assistant reply lands on 2026-04-03.
+query TIII
+SELECT date, message_count, session_count, tool_call_count
+FROM read_stats(path='test/data_codex_activity', source='codex')
+ORDER BY date;
+----
+2026-04-01	2	1	2
+2026-04-02	1	1	1
+2026-04-03	1	0	0
+
+# Auto-detection agrees with explicit source
+query I
+SELECT COUNT(*) FROM read_stats(path='test/data_codex_activity') WHERE source = 'codex';
+----
+3
+
+# Message and tool-call totals agree with read_conversations
+query II
+SELECT
+  COUNT(*) FILTER (WHERE message_type IN ('user', 'assistant', 'agent_message') AND author <> 'system'),
+  COUNT(*) FILTER (WHERE message_type IN ('function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call'))
+FROM read_conversations(path='test/data_codex_activity', source='codex');
+----
+4	3
+
+# Existing single-session fixture
+query TIII
+SELECT date, message_count, session_count, tool_call_count
+FROM read_stats(path='test/data_codex', source='codex');
+----
+2026-03-11	2	1	1
+
+# Codex has no standalone plans or todos: zero rows, normal schema
+query I
+SELECT COUNT(*) FROM read_plans(path='test/data_codex_activity', source='codex');
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_todos(path='test/data_codex_activity', source='codex');
+----
+0
+
+query I
+SELECT COUNT(*) FROM (DESCRIBE FROM read_plans(path='test/data_codex_activity', source='codex'));
+----
+7
+
+query I
+SELECT COUNT(*) FROM (DESCRIBE FROM read_todos(path='test/data_codex_activity', source='codex'));
+----
+8
+
+# Claude and Codex stats union by name
+query I
+SELECT COUNT(DISTINCT source) FROM (
+  FROM read_stats(path='test/data_claude', source='claude')
+  UNION ALL BY NAME
+  FROM read_stats(path='test/data_codex_activity', source='codex')
+);
+----
+2

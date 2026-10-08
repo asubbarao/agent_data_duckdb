@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-04-02T23:59:00.000Z","payload":{"id":"019d0000-bbbb-7000-8000-00000000000b","cwd":"/Users/testuser/beta","cli_version":"0.120.0","model_provider":"openai","originator":"codex_cli_rs","source":"cli"}}
+{"type":"turn_context","timestamp":"2026-04-02T23:59:00.500Z","payload":{"model":"gpt-5.3-codex","cwd":"/Users/testuser/beta","effort":"medium"}}
+{"type":"response_item","timestamp":"2026-04-02T23:59:01.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Explain main.rs"}]}}
+{"type":"response_item","timestamp":"2026-04-02T23:59:30.000Z","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"cat\",\"main.rs\"]}","call_id":"call_b1"}}
+{"type":"response_item","timestamp":"2026-04-02T23:59:31.000Z","payload":{"type":"function_call_output","call_id":"call_b1","output":"fn main() {}"}}
+{"type":"response_item","timestamp":"2026-04-03T00:00:10.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"It defines an empty main."}]}}

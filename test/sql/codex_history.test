@@ -1,0 +1,68 @@
+# name: test/sql/codex_history.test
+# description: Codex read_history from history.jsonl ({session_id, ts, text})
+# group: [agent_data]
+
+require agent_data
+
+# 5 physical lines: 3 valid, 1 blank (skipped), 1 malformed (parse-error row)
+query I
+SELECT COUNT(*) FROM read_history(path='test/data_codex_activity', source='codex');
+----
+4
+
+# Auto-detected as Codex from sessions/<YYYY>/
+query I
+SELECT COUNT(*) FROM read_history(path='test/data_codex_activity') WHERE source = 'codex';
+----
+4
+
+# ts seconds -> timestamp_ms; text -> display; project and pasted_contents NULL
+query IIITTTT
+SELECT source, line_number, timestamp_ms, project, session_id, display, pasted_contents
+FROM read_history(path='test/data_codex_activity', source='codex')
+WHERE timestamp_ms IS NOT NULL
+ORDER BY line_number;
+----
+codex	1	1775034000000	NULL	019d0000-aaaa-7000-8000-00000000000a	List the files.	NULL
+codex	2	1775034060000	NULL	019d0000-aaaa-7000-8000-00000000000a	/model gpt-5.3-codex	NULL
+codex	4	1775174340000	NULL	019d0000-bbbb-7000-8000-00000000000b	Explain main.rs	NULL
+
+# Malformed line surfaces as a parse-error row, not a silent drop
+query IT
+SELECT line_number, display LIKE 'Parse error:%'
+FROM read_history(path='test/data_codex_activity', source='codex')
+WHERE timestamp_ms IS NULL;
+----
+5	true
+
+# A history.jsonl path can be passed directly
+query I
+SELECT COUNT(*) FROM read_history(path='test/data_codex_activity/history.jsonl', source='codex');
+----
+4
+
+# history session_id joins read_conversations session_id
+query I
+SELECT COUNT(DISTINCT h.session_id)
+FROM read_history(path='test/data_codex_activity', source='codex') h
+JOIN read_conversations(path='test/data_codex_activity', source='codex') c
+  ON c.session_id = h.session_id;
+----
+2
+
+# Codex home without history.jsonl -> zero rows, normal schema
+query I
+SELECT COUNT(*) FROM read_history(path='test/data_codex', source='codex');
+----
+0
+
+# Claude and Codex history union by name
+query TI
+SELECT source, COUNT(*) FROM (
+  FROM read_history(path='test/data_claude', source='claude')
+  UNION ALL BY NAME
+  FROM read_history(path='test/data_codex_activity', source='codex')
+) GROUP BY source ORDER BY source;
+----
+claude	20
+codex	4

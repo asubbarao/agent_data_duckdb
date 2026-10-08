@@ -74,6 +74,69 @@ impl Stats {
             )
             .collect()
     }
+
+    /// Codex has no stats cache. Roll up rollout rows (as `read_conversations`
+    /// emits them) by UTC date: user/assistant turns (harness envelopes
+    /// excluded), tool calls, and sessions counted on the date of their first
+    /// timestamped row.
+    fn load_codex_rows(path: Option<&str>) -> Vec<StatsRow> {
+        let date_of = |ts: &Option<String>| -> Option<String> {
+            ts.as_deref()
+                .and_then(|t| t.get(..10))
+                .filter(|d| {
+                    d.char_indices().all(|(i, c)| match i {
+                        4 | 7 => c == '-',
+                        _ => c.is_ascii_digit(),
+                    })
+                })
+                .map(str::to_string)
+        };
+        // date → (messages, sessions, tool_calls)
+        let mut by_date: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
+        // session → earliest timestamp seen
+        let mut session_start: BTreeMap<String, Option<String>> = BTreeMap::new();
+
+        for (session_id, timestamp, message_type, author) in
+            crate::conversations::Conversations::codex_activity(path)
+        {
+            let start = session_start.entry(session_id).or_insert(None);
+            if timestamp.is_some() && (start.is_none() || timestamp < *start) {
+                *start = timestamp.clone();
+            }
+            let is_message = matches!(
+                message_type.as_str(),
+                "user" | "assistant" | "agent_message"
+            ) && author != "system";
+            let is_tool_call = matches!(
+                message_type.as_str(),
+                "function_call" | "custom_tool_call" | "local_shell_call" | "web_search_call"
+            );
+            if !is_message && !is_tool_call {
+                continue;
+            }
+            let date = date_of(&timestamp).unwrap_or_else(|| "unknown".to_string());
+            let entry = by_date.entry(date).or_insert((0, 0, 0));
+            entry.0 += is_message as i64;
+            entry.2 += is_tool_call as i64;
+        }
+        for start in session_start.values() {
+            let date = date_of(start).unwrap_or_else(|| "unknown".to_string());
+            by_date.entry(date).or_insert((0, 0, 0)).1 += 1;
+        }
+
+        by_date
+            .into_iter()
+            .map(
+                |(date, (message_count, session_count, tool_call_count))| StatsRow {
+                    source: "codex".to_string(),
+                    date,
+                    message_count,
+                    session_count,
+                    tool_call_count,
+                },
+            )
+            .collect()
+    }
 }
 
 impl TableFunc for Stats {
@@ -116,12 +179,13 @@ impl TableFunc for Stats {
                     .collect()
             }
             Provider::Grok => Self::load_grok_rows(&base_path),
-            // Only Claude ships stats-cache.json; Grok rolls up signals.json.
-            // Other providers: derive in SQL from read_conversations() instead.
+            Provider::Codex => Self::load_codex_rows(path),
+            // Only Claude ships stats-cache.json; Grok rolls up signals.json and
+            // Codex rolls up its rollouts. Other providers: derive in SQL from
+            // read_conversations() instead.
             Provider::ClaudeDesktop
             | Provider::Copilot
             | Provider::Cursor
-            | Provider::Codex
             | Provider::Gemini
             | Provider::Unknown => Vec::new(),
         }

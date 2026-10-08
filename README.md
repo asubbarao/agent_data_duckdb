@@ -371,6 +371,9 @@ WHERE session_id = '…' AND line_number = 42;
 Reads plan files.
 - **Claude:** `plans/*.md`
 - **Copilot:** `session-state/<uuid>/plan.md`
+- **Codex:** no standalone plan files exist (plans live inline in the rollout
+  stream as `update_plan` tool calls); `source='codex'` returns zero rows with
+  this schema.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -387,6 +390,8 @@ Reads plan files.
 Reads todo/checklist items.
 - **Claude:** `todos/<session>-agent-<agent>.json`
 - **Copilot:** Checkpoint markdown checklists from `session-state/<uuid>/checkpoints/*.md`
+- **Codex:** no `todos/` store exists; `source='codex'` returns zero rows with
+  this schema.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -404,14 +409,21 @@ Reads todo/checklist items.
 Reads command history.
 - **Claude:** `history.jsonl` (structured JSONL)
 - **Copilot:** `command-history-state.json` (simple string array)
+- **Codex:** `<CODEX_HOME>/history.jsonl` (default `~/.codex`; `path` may also
+  name the file). Each line is `{session_id, ts, text}`: `ts` (Unix seconds) →
+  `timestamp_ms` (× 1000), `session_id` → `session_id` (the rollout thread id,
+  joinable to `read_conversations`), `text` → `display`. Codex records no
+  project or pasted content here, so `project` and `pasted_contents` are NULL
+  (join `read_conversations().cwd` on `session_id` for the project).
+  A malformed line becomes a row whose `display` starts with `Parse error:`.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, or `'copilot'` |
+| `source` | VARCHAR | `'claude'`, `'claude-desktop'`, `'copilot'`, or `'codex'` |
 | `line_number` | BIGINT | Line/entry number (1-based) |
-| `timestamp_ms` | BIGINT | Unix timestamp in ms (Claude only) |
+| `timestamp_ms` | BIGINT | Unix timestamp in ms (Claude, Codex) |
 | `project` | VARCHAR | Project path (Claude only) |
-| `session_id` | VARCHAR | Session UUID (Claude only) |
+| `session_id` | VARCHAR | Session UUID (Claude, Codex) |
 | `display` | VARCHAR | Command/prompt text |
 | `pasted_contents` | VARCHAR | Pasted content as JSON (Claude only) |
 
@@ -423,12 +435,21 @@ Reads daily activity stats.
   `summary.created_at` date into the same columns (no new table function).
   `message_count` = `userMessageCount + assistantMessageCount` (else
   `summary.num_messages`); `tool_call_count` = `signals.toolCallCount`;
-  `session_count` = sessions on that date. Other providers return empty
-  (derive from `read_conversations()` in SQL instead).
+  `session_count` = sessions on that date.
+- **Codex:** rolls up active rollouts (the rows `read_conversations` emits) by
+  the UTC date of each row's timestamp. `message_count` = `user`, `assistant`
+  and `agent_message` rows whose `author` is not `system` (harness envelopes
+  such as `<environment_context>` are excluded; event_msg copies are already
+  de-duplicated by the loader); `tool_call_count` = `function_call`,
+  `custom_tool_call`, `local_shell_call` and `web_search_call` rows;
+  `session_count` = sessions on the date of their first timestamped row.
+  Archived rollouts are not included.
+
+Other providers return empty (derive from `read_conversations()` in SQL instead).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `source` | VARCHAR | `'claude'` or `'grok'` |
+| `source` | VARCHAR | `'claude'`, `'grok'`, or `'codex'` |
 | `date` | VARCHAR | Date (YYYY-MM-DD) |
 | `message_count` | BIGINT | Messages sent that day |
 | `session_count` | BIGINT | Sessions started that day |
