@@ -127,11 +127,14 @@ impl Events {
                         if subagent.metadata()?.is_file()
                             && subagent.file_name().to_string_lossy().starts_with("agent-")
                             && subpath.extension().is_some_and(|e| e == "jsonl")
+                            && utils::passes_modified_after(&subpath)
                         {
                             files.push((utils::fallback_session_id(&subpath), subpath));
                         }
                     }
-                } else if path.extension().is_some_and(|e| e == "jsonl") {
+                } else if path.extension().is_some_and(|e| e == "jsonl")
+                    && utils::passes_modified_after(&path)
+                {
                     files.push((utils::fallback_session_id(&path), path));
                 }
             }
@@ -435,6 +438,10 @@ impl TableFunc for Events {
     }
 
     fn supports_include_archived() -> bool {
+        true
+    }
+
+    fn supports_modified_after() -> bool {
         true
     }
 

@@ -3110,6 +3110,10 @@ impl TableFunc for Conversations {
         true
     }
 
+    fn supports_modified_after() -> bool {
+        true
+    }
+
     fn try_load_rows_with_options(
         path: Option<&str>,
         source: Option<&str>,
