@@ -1,0 +1,69 @@
+# name: test/sql/provider_subagent_flag.test
+# description: Native Claude/Codex child evidence is distinct from agent behavior
+# group: [agent_data]
+
+require agent_data
+
+# Root, siblings sharing the parent's native session ID, and unknown metadata.
+query TTI
+SELECT DISTINCT session_id, file_name, is_sub_agent
+FROM read_conversations(path='test/data_subagent_claude', source='claude')
+ORDER BY file_name;
+----
+root	agent-first.jsonl	1
+root	agent-second.jsonl	1
+root	root.jsonl	0
+unknown	unknown.jsonl	NULL
+
+# Exact-file reads preserve native child parent and path evidence.
+query TTII
+SELECT session_id, parent_session_id, is_agent, is_sub_agent
+FROM read_conversations(path='test/data_subagent_claude/projects/-Users-test-project/root/subagents/agent-first.jsonl', source='claude');
+----
+root	root	1	1
+
+query TI
+SELECT session_id, is_sub_agent
+FROM read_conversations(path='test/data_subagent_claude/projects/-Users-test-project/root.jsonl', source='claude-desktop')
+WHERE message_type='summary';
+----
+root	0
+
+# A CLI channel is native root evidence. Exec alone cannot establish lineage.
+query TIT
+SELECT DISTINCT session_id, is_sub_agent, parent_session_id
+FROM read_conversations(path='test/data_subagent_codex', source='codex')
+ORDER BY session_id;
+----
+child	1	root
+exec	NULL	NULL
+missing	NULL	NULL
+parent-only	1	root
+root	0	NULL
+unknown	NULL	NULL
+
+# Parent launch events survive for cross-client reconstruction; sharing cwd
+# and an exec source never manufactures a child/parent relationship.
+query TT
+SELECT tool_name, tool_use_id
+FROM read_conversations(path='test/data_subagent_codex', source='codex')
+WHERE session_id='root' AND message_type='function_call';
+----
+exec_command	launch-1
+
+# A native parent pointer alone makes a Codex thread a child: is_agent follows
+# every native parent pointer (bcb7b60), and is_sub_agent agrees.
+query II
+SELECT is_agent,is_sub_agent FROM read_conversations(path='test/data_subagent_codex',source='codex')
+WHERE session_id='parent-only';
+----
+1	1
+
+# A fork records ancestry without being native agent delegation. Unknown source
+# names stay unknown rather than being treated as primary sessions.
+query TI
+SELECT forked_from_session_id,is_sub_agent
+FROM read_conversations(path='test/data_subagent_codex',source='codex')
+WHERE session_id='unknown';
+----
+root	NULL

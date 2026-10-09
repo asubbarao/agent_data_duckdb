@@ -288,6 +288,24 @@ tool call when the brief text or cwd and start time match.
 > wire event's ISO time (same `timestamp` column as Claude). No `updates.jsonl`
 > → summary session stamp only.
 
+#### Reading child conversations
+
+`read_conversations()` includes child transcripts. Filter with `is_sub_agent IS TRUE`; no separate reader is needed. This nullable column is appended after existing columns, and `is_agent` keeps its historical behavior.
+
+For Claude Code and Desktop transcripts, `TRUE` comes from native child layout (nested `subagents/` or legacy `agent-*.jsonl`) or `agentId` together with `isSidechain=true`. An explicit `isSidechain=false` establishes a native mainline transcript. Classification applies to every row in the transcript. Nested siblings can share their parent's `session_id`; distinguish them by `file_path` and native agent evidence. A Claude path can name one exact JSONL transcript when `source` is supplied.
+
+For Codex CLI and Desktop, `TRUE` comes from native subagent source metadata, nonempty `parent_thread_id`/`parent_session_id`, or nonempty `agent_path`. Native `cli`, `vscode`, and `app` source channels establish explicit primary/native sessions when child evidence is absent, independent of any external process launch. `FALSE` therefore does not prove a human started the session. `exec` and missing metadata remain `NULL`: a separately launched `codex exec` can be a user task or another agent's child. Retain launching tool events and child transcript IDs to reconstruct those links; a shared working directory does not establish a parent. Other providers return `NULL` for this scoped classification.
+
+```sql
+SELECT source,session_id,parent_session_id,file_path,model,message_content
+FROM read_conversations(path='~/.codex',source='codex')
+WHERE is_sub_agent IS TRUE;
+
+SELECT session_id,parent_session_id,file_path,message_content
+FROM read_conversations(path='~/.claude',source='claude')
+WHERE is_sub_agent IS TRUE;
+```
+
 ### `read_events([path (opt)], [source (opt)])`
 
 The **lossless raw JSONL relation**: one row per *physical line* of every
