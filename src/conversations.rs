@@ -1192,6 +1192,10 @@ impl TableFunc for Conversations {
         ]
     }
 
+    fn supports_modified_after() -> bool {
+        true
+    }
+
     fn load_rows(path: Option<&str>, source: Option<&str>) -> Vec<ConversationRow> {
         let base_path = utils::resolve_data_path(path);
         match detect::resolve_provider(&base_path, source) {

@@ -6,6 +6,7 @@ use duckdb::{
 use std::ffi::CString;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
 // ─── Column definition helpers ───
 
@@ -82,13 +83,49 @@ pub trait TableFunc: Sized + 'static {
     fn columns() -> Vec<ColDef>;
     fn load_rows(path: Option<&str>, source: Option<&str>) -> Vec<Self::Row>;
     fn write_row(output: &mut DataChunkHandle, idx: usize, row: &Self::Row);
+
+    /// Whether the function takes `modified_after := TIMESTAMP` (skip transcript files
+    /// last modified at or before it during discovery).
+    fn supports_modified_after() -> bool {
+        false
+    }
 }
 
 #[repr(C)]
 pub struct GenericBindData<R: Send + 'static> {
     path: Option<String>,
     source: Option<String>,
+    modified_after: Option<SystemTime>,
     rows: Mutex<Option<Vec<R>>>,
+}
+
+/// A DuckDB TIMESTAMP rendered as text (`YYYY-MM-DD HH:MM:SS[.ffffff]`, read as UTC) to SystemTime.
+fn parse_timestamp(text: &str) -> Result<SystemTime, Box<dyn std::error::Error>> {
+    let bad = || format!("modified_after: cannot read '{text}' as a timestamp");
+    let text = text.trim();
+    let (date, time) = text.split_once([' ', 'T']).unwrap_or((text, "00:00:00"));
+    let time = time.split(['+', 'Z']).next().unwrap_or("00:00:00");
+    let mut d = date.splitn(3, '-').map(|p| p.parse::<i64>());
+    let (Some(Ok(y)), Some(Ok(m)), Some(Ok(day))) = (d.next(), d.next(), d.next()) else {
+        return Err(bad().into());
+    };
+    let mut t = time.splitn(3, ':');
+    let hour: i64 = t.next().unwrap_or("0").parse().map_err(|_| bad())?;
+    let minute: i64 = t.next().unwrap_or("0").parse().map_err(|_| bad())?;
+    let second: f64 = t.next().unwrap_or("0").parse().map_err(|_| bad())?;
+    // Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's days_from_civil).
+    let yy = if m <= 2 { y - 1 } else { y };
+    let era = if yy >= 0 { yy } else { yy - 399 } / 400;
+    let yoe = yy - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + day - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    let micros = (days * 86_400 + hour * 3_600 + minute * 60) * 1_000_000 + (second * 1e6).round() as i64;
+    let offset = Duration::from_micros(micros.unsigned_abs());
+    Ok(if micros >= 0 {
+        SystemTime::UNIX_EPOCH + offset
+    } else {
+        SystemTime::UNIX_EPOCH - offset
+    })
 }
 
 #[repr(C)]
@@ -131,7 +168,11 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
 
         let path = resolve_path(bind);
         let source = resolve_source(bind);
-        Ok(GenericBindData { path, source, rows: Mutex::new(None) })
+        let modified_after = match bind.get_named_parameter("modified_after") {
+            Some(value) if !value.is_null() => Some(parse_timestamp(&value.to_string())?),
+            _ => None,
+        };
+        Ok(GenericBindData { path, source, modified_after, rows: Mutex::new(None) })
     }
 
     fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn std::error::Error>> {
@@ -148,10 +189,9 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
 
         // Lazy load: defer I/O from bind (planning) to first func() call (execution)
         if guard.is_none() {
-            *guard = Some(T::load_rows(
-                bind_data.path.as_deref(),
-                bind_data.source.as_deref(),
-            ));
+            *guard = Some(crate::utils::with_modified_after(bind_data.modified_after, || {
+                T::load_rows(bind_data.path.as_deref(), bind_data.source.as_deref())
+            }));
         }
         let rows = guard.as_ref().unwrap();
 
@@ -172,9 +212,13 @@ impl<T: TableFunc> VTab for GenericVTab<T> {
     }
 
     fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
-        Some(vec![
+        let mut parameters = vec![
             ("path".to_string(), LogicalTypeHandle::from(LogicalTypeId::Varchar)),
             ("source".to_string(), LogicalTypeHandle::from(LogicalTypeId::Varchar)),
-        ])
+        ];
+        if T::supports_modified_after() {
+            parameters.push(("modified_after".to_string(), LogicalTypeHandle::from(LogicalTypeId::Timestamp)));
+        }
+        Some(parameters)
     }
 }

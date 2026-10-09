@@ -1,4 +1,77 @@
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+thread_local! {
+    /// The `modified_after` cutoff of the table function call loading on this thread.
+    static MODIFIED_AFTER: Cell<Option<SystemTime>> = const { Cell::new(None) };
+}
+
+/// Run `load` with a file-modification cutoff in force for transcript discovery on this thread.
+/// Loading happens synchronously inside one table-function call, so the cutoff reaches every
+/// provider's discovery walk without threading a parameter through each loader.
+pub fn with_modified_after<R>(cutoff: Option<SystemTime>, load: impl FnOnce() -> R) -> R {
+    let previous = MODIFIED_AFTER.with(|c| c.replace(cutoff));
+    let result = load();
+    MODIFIED_AFTER.with(|c| c.set(previous));
+    result
+}
+
+/// False only when a `modified_after` cutoff is in force and the file was last modified at or
+/// before it. A file whose modified time cannot be read is kept, so the reader reports it.
+pub fn passes_modified_after(path: &Path) -> bool {
+    match MODIFIED_AFTER.with(Cell::get) {
+        None => true,
+        Some(cutoff) => path
+            .metadata()
+            .and_then(|m| m.modified())
+            .map_or(true, |modified| modified > cutoff),
+    }
+}
+
+#[cfg(test)]
+mod modified_after_tests {
+    use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    fn write_with_mtime(path: &Path, secs: u64) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(secs)).unwrap();
+    }
+
+    #[test]
+    fn cutoff_keeps_newer_files_and_skips_older_ones() {
+        let root = std::env::temp_dir().join(format!("agent_data_modified_after_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("projects").join("-p");
+        write_with_mtime(&project.join("old.jsonl"), 946_684_800); // 2000-01-01
+        write_with_mtime(&project.join("new.jsonl"), 1_577_836_800); // 2020-01-01
+        write_with_mtime(&project.join("s1").join("subagents").join("agent-old.jsonl"), 946_684_800);
+        write_with_mtime(&project.join("s1").join("subagents").join("agent-new.jsonl"), 1_577_836_800);
+        let day = root.join("sessions").join("2026").join("10").join("08");
+        write_with_mtime(&day.join("rollout-old-00000000-0000-0000-0000-000000000001.jsonl"), 946_684_800);
+        write_with_mtime(&day.join("rollout-new-00000000-0000-0000-0000-000000000002.jsonl"), 1_577_836_800);
+
+        let claude = |files: Vec<(String, bool, PathBuf)>| -> Vec<String> {
+            files.into_iter().map(|(_, _, p)| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+        };
+        let codex = |files: Vec<(String, PathBuf)>| files.len();
+        let cutoff = Some(UNIX_EPOCH + Duration::from_secs(1_262_304_000)); // 2010-01-01
+
+        assert_eq!(claude(discover_conversation_files(&root)).len(), 4);
+        assert_eq!(
+            claude(with_modified_after(cutoff, || discover_conversation_files(&root))),
+            vec!["new.jsonl".to_string(), "agent-new.jsonl".to_string()]
+        );
+        assert_eq!(codex(discover_codex_rollout_files(&root)), 2);
+        assert_eq!(codex(with_modified_after(cutoff, || discover_codex_rollout_files(&root))), 1);
+        // The cutoff is scoped to the call: discovery afterwards sees every file again.
+        assert_eq!(claude(discover_conversation_files(&root)).len(), 4);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
 
 /// Resolve a data directory path.
 /// If path is provided, expand ~ and return it.
@@ -68,6 +141,7 @@ fn discover_project_jsonl_files(projects_dir: &Path) -> Vec<(String, bool, PathB
                     .extension()
                     .map_or(false, |ext| ext == "jsonl")
             })
+            .filter(|e| passes_modified_after(&e.path()))
             .collect();
         jsonl_files.sort_by_key(|e| e.file_name());
 
@@ -116,6 +190,7 @@ fn discover_subagent_files(project_dir: &Path) -> Vec<PathBuf> {
                     .extension()
                     .map_or(false, |ext| ext == "jsonl")
             })
+            .filter(|e| passes_modified_after(&e.path()))
             .collect();
         jsonl_files.sort_by_key(|e| e.file_name());
 
@@ -491,7 +566,7 @@ fn walk_codex(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
             walk_codex(&path, out);
         } else {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("rollout-") && name.ends_with(".jsonl") {
+            if name.starts_with("rollout-") && name.ends_with(".jsonl") && passes_modified_after(&path) {
                 // session uuid is the trailing UUID (5 hyphen-delimited groups)
                 // before `.jsonl`.
                 let stem = name.strip_suffix(".jsonl").unwrap_or(&name);

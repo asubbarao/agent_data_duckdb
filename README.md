@@ -123,6 +123,8 @@ All functions accept two optional parameters:
 - **`path`** — data directory path (default: `~/.claude`). Auto-detected from folder structure (`local-agent-mode-sessions/` → Claude Desktop, `projects/` → Claude, `session-state/` → Copilot, a `state.vscdb` file → Cursor, `sessions/<YYYY>/` → Codex, `tmp/` + `installation_id` → Gemini CLI, `sessions/<%encoded-cwd>/` → Grok). Grok lives at `~/.grok`, so pass `path='~/.grok'` (or `source='grok'`).
 - **`source`** — explicit provider override: `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`. Use when auto-detection fails or for non-standard directory layouts.
 
+`read_conversations()` also takes **`modified_after`**, a `TIMESTAMP` (UTC): discovery skips every Claude, Claude Desktop, subagent and Codex transcript file last modified at or before it, so an incremental load reads only the files that changed: `read_conversations(source='claude', modified_after := TIMESTAMP '2026-10-08 18:00')`. A changed file is read whole (transcripts are appended to), so dedupe on `uuid`. `NULL` means no cutoff.
+
 Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`) as the first column.
 
 > **Cursor** support is gated behind the default-on `cursor` cargo feature. It reads `state.vscdb` with a self-contained, pure-Rust, read-only SQLite reader (`src/vscdb.rs`) — no external dependency and no bundled C SQLite, so every target arch (including `windows_amd64_mingw`) builds with negligible size overhead. Build with `--no-default-features` to drop it. Only `read_conversations()` is implemented for Cursor; the other tables return no rows for `source='cursor'`.

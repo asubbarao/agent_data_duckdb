@@ -1,0 +1,49 @@
+# name: test/sql/modified_after.test
+# description: modified_after skips transcript files last modified at or before the cutoff, during discovery
+# group: [agent_data]
+
+require agent_data
+
+# A cutoff before every fixture keeps every file: same rows as no parameter (Claude, nested subagents, Codex).
+query I
+SELECT (SELECT COUNT(*) FROM read_conversations(path='test/data_claude_subagents', modified_after := TIMESTAMP '1970-01-01'))
+     = (SELECT COUNT(*) FROM read_conversations(path='test/data_claude_subagents'));
+----
+true
+
+query I
+SELECT (SELECT COUNT(*) FROM read_conversations(path='test/data_codex', source='codex', modified_after := TIMESTAMP '1970-01-01'))
+     = (SELECT COUNT(*) FROM read_conversations(path='test/data_codex', source='codex'));
+----
+true
+
+# A cutoff after every fixture skips every file.
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude_subagents', modified_after := TIMESTAMP '2999-01-01');
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_codex', source='codex', modified_after := TIMESTAMP '2999-01-01');
+----
+0
+
+# NULL is the same as no cutoff.
+query I
+SELECT (SELECT COUNT(*) FROM read_conversations(path='test/data_claude', modified_after := NULL::TIMESTAMP))
+     = (SELECT COUNT(*) FROM read_conversations(path='test/data_claude'));
+----
+true
+
+# A string literal is accepted (cast to TIMESTAMP).
+query I
+SELECT COUNT(*) FROM read_conversations(path='test/data_claude', modified_after := '2999-01-01 00:00:00');
+----
+0
+
+# The schema does not change with the parameter.
+query I
+SELECT (SELECT list(column_name) FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude', modified_after := TIMESTAMP '2999-01-01')))
+     = (SELECT list(column_name) FROM (DESCRIBE SELECT * FROM read_conversations(path='test/data_claude')));
+----
+true
