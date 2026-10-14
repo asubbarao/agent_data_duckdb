@@ -1,0 +1,2 @@
+{"type":"user","uuid":"p-1","parentUuid":null,"isSidechain":false,"userType":"external","entrypoint":"claude-desktop","cwd":"/Users/testuser/project-unified","sessionId":"aaaa0000-0000-4000-8000-000000000000","version":"2.1.290","gitBranch":"main","timestamp":"2026-10-02T09:00:00.000Z","promptId":"prompt-0","turnOrigin":"human","message":{"role":"user","content":"Start here."}}
+{"type":"continued-in","timestamp":"2026-10-02T09:30:00.000Z","sessionId":"aaaa0000-0000-4000-8000-000000000000","continuedInSessionId":"aaaa1111-0000-4000-8000-000000000001"}

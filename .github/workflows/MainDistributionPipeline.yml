@@ -22,3 +22,27 @@ jobs:
       extension_name: agent_data
       extra_toolchains: rust
       exclude_archs: "wasm_mvp;wasm_eh;wasm_threads;linux_amd64_musl"
+
+  # Mapped column = raw field, checked with the duck_diff and finetype community
+  # extensions. The sqllogictest suite above runs on every distribution
+  # platform, where those community builds cannot be relied on, so this runs
+  # the built linux_amd64 artifact with the DuckDB CLI instead.
+  raw-mapping-coverage:
+    name: Claude raw-to-column coverage
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent_data-v1.5.6-extension-linux_amd64
+          path: artifact
+      - name: DuckDB CLI v1.5.6
+        run: |
+          curl -sSL --fail -o duckdb_cli.zip https://github.com/duckdb/duckdb/releases/download/v1.5.6/duckdb_cli-linux-amd64.zip
+          unzip -q duckdb_cli.zip -d cli
+      - name: Mapped = raw (duck_diff), no unread field (finetype)
+        run: |
+          cli/duckdb -unsigned -bail \
+            -cmd "LOAD '$PWD/artifact/agent_data.duckdb_extension'" \
+            -f test/mapping/claude_raw_mapping.sql
