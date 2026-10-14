@@ -34,7 +34,8 @@ WHERE message_type = 'assistant' AND nullif(trim(message_content), '') IS NULL A
 ----
 
 # A turn starts at the user record with a new promptId; replies and tool
-# results belong to it, and turnOrigin says what started it.
+# results belong to it, and turnOrigin says what started it. A queued prompt
+# that resumes an earlier turn keeps that turn's origin.
 query IIIII
 SELECT line_number, message_type, turn_id, root_turn_id, thread_source
 FROM read_conversations(path='test/data_claude_unified', source='claude')
@@ -47,6 +48,7 @@ ORDER BY line_number;
 15	system	prompt-1	prompt-1	human
 16	user	prompt-2	prompt-2	task_notification
 17	assistant	prompt-2	prompt-2	task_notification
+18	user	prompt-1	prompt-1	human
 
 # event_type is the record's own type, or a system record's subtype; a
 # compaction boundary links across the summary with logicalParentUuid, and
@@ -58,7 +60,7 @@ WHERE file_name = 'aaaa1111-0000-4000-8000-000000000001.jsonl' AND event_type IN
 ORDER BY line_number;
 ----
 15	compact_boundary	u-2	Conversation compacted	auto
-18	last-prompt	a-3	Find the flaky test.	NULL
+19	last-prompt	a-3	Find the flaky test.	NULL
 
 # Attachments are harness context: the kind is the event, the role is system,
 # and tool_name is set only when the attachment cites a real tool call.
@@ -89,7 +91,7 @@ SELECT DISTINCT agent_nickname, agent_role, repository, channel, forked_from_ses
 FROM read_conversations(path='test/data_claude_unified', source='claude')
 WHERE file_name = 'aaaa1111-0000-4000-8000-000000000001.jsonl';
 ----
-flaky-test-hunt	claude	testuser/project-unified	cse_01UnifiedBridge	aaaa0000-0000-4000-8000-000000000000	2026-10-03T10:00:00.000Z	2026-10-03T10:03:05.000Z	/Users/testuser/project-unified	cli
+flaky-test-hunt	claude	testuser/project-unified	cse_01UnifiedBridge	aaaa0000-0000-4000-8000-000000000000	2026-10-03T10:00:00.000Z	2026-10-03T10:03:10.000Z	/Users/testuser/project-unified	cli
 
 # The session titles, modes and PR links are kept in metadata.session.
 query IIIII

@@ -139,12 +139,22 @@ SELECT CASE WHEN status = 'identical' THEN 'ok'
        column_name
 FROM schema_diff('FROM claude_mapped', 'FROM claude_derived');
 
--- The rows that differ, for the log, before the assertion below fails.
-SELECT * EXCLUDE (diff_data)
-FROM table_diff('FROM claude_mapped', 'FROM claude_derived',
-                pk := ['file_path', 'line_number', 'record_id'])
-WHERE diff_status <> 'identical'
-LIMIT 20;
+-- Which columns differ, with example rows, for the log before the assertion
+-- below fails.
+SELECT replace(column_name, '_diff_status', '') AS column_name, status,
+       count(record_id) AS n_rows,
+       list(file_path || ':' || line_number ORDER BY file_path, line_number)[1:3] AS examples
+FROM (
+    UNPIVOT (
+        SELECT file_path, line_number, record_id, COLUMNS('_diff_status$')
+        FROM table_diff('FROM claude_mapped', 'FROM claude_derived',
+                        pk := ['file_path', 'line_number', 'record_id'])
+        WHERE diff_status <> 'identical'
+    ) ON COLUMNS('_diff_status$') INTO NAME column_name VALUE status
+)
+WHERE status <> 'identical'
+GROUP BY ALL
+ORDER BY n_rows DESC;
 
 SELECT CASE WHEN n_total = n_identical THEN 'ok'
             ELSE error(printf('mapped != raw on %d of %d rows', n_total - n_identical, n_total)) END AS mapping_check,
@@ -158,7 +168,7 @@ FROM table_diff_summary('FROM claude_mapped', 'FROM claude_derived',
 SELECT * FROM (
     UNPIVOT (
         SELECT message_type,
-               round(100 * avg((nullif(trim(COLUMNS(* EXCLUDE (message_type, j))::VARCHAR), '') IS NULL)::INT), 1)
+               round(100 * avg((nullif(trim(COLUMNS(* EXCLUDE (message_type, j, raw_event, metadata))::VARCHAR), '') IS NULL)::INT), 1)
         FROM claude_rows
         GROUP BY message_type
     ) ON COLUMNS(* EXCLUDE (message_type)) INTO NAME column_name VALUE pct_blank
@@ -188,20 +198,21 @@ WHERE a.message_type = 'attachment' AND a.tool_name IS NOT NULL;
 -- (message, toolUseResult, attachment, rendered, snapshot) feed
 -- message_content/tool_* or stay in raw_event.
 CREATE TEMP VIEW claude_raw_fields AS
-SELECT c.file_path, c.line_number, c.record_id, f.field,
-       ft_unpack(c.raw_event)::JSON -> f.field ->> 'type' AS finetype
-FROM claude_rows c
-CROSS JOIN UNNEST(json_keys(ft_unpack(c.raw_event)::JSON)) AS f(field)
-WHERE c.j IS NOT NULL;
+SELECT u.record_id, u.metadata, f.field, u.ft -> f.field ->> 'type' AS finetype
+FROM (
+    SELECT record_id, metadata, ft_unpack(raw_event)::JSON AS ft
+    FROM claude_rows
+    WHERE j IS NOT NULL
+) u
+CROSS JOIN UNNEST(json_keys(u.ft)) AS f(field);
 
 CREATE TEMP VIEW claude_unread_fields AS
-SELECT r.field, r.finetype, r.record_id
-FROM claude_raw_fields r
-JOIN claude_rows c USING (record_id)
-WHERE r.field NOT IN ('message', 'content', 'toolUseResult', 'attachment', 'rendered', 'snapshot',
-                      'uuid', 'parentUuid', 'sessionId', 'timestamp', 'cwd', 'version',
-                      'gitBranch', 'slug', 'type')
-  AND NOT coalesce(json_exists(c.metadata, '$.record.' || to_json(r.field)::VARCHAR), false);
+SELECT field, finetype, record_id
+FROM claude_raw_fields
+WHERE field NOT IN ('message', 'content', 'toolUseResult', 'attachment', 'rendered', 'snapshot',
+                    'uuid', 'parentUuid', 'sessionId', 'timestamp', 'cwd', 'version',
+                    'gitBranch', 'slug', 'type')
+  AND NOT coalesce(json_exists(metadata, '$.record.' || to_json(field)::VARCHAR), false);
 
 SELECT * FROM claude_unread_fields LIMIT 20;
 

@@ -652,6 +652,7 @@ impl Conversations {
             // rows after it, replies and tool results included, belong to it.
             let mut turn_id: Option<String> = None;
             let mut turn_origin: Option<String> = None;
+            let mut turn_origins: HashMap<String, String> = HashMap::new();
 
             let mut reader = BufReader::new(file);
             let mut raw_bytes = Vec::new();
@@ -737,8 +738,10 @@ impl Conversations {
                 if let Some(value) = value.as_ref() {
                     if let Some(prompt_id) = Self::claude_text(value, "promptId") {
                         if turn_id.as_deref() != Some(prompt_id.as_str()) {
+                            // Queued prompts interleave: a turn can resume
+                            // after another one, keeping the origin it had.
+                            turn_origin = turn_origins.get(&prompt_id).cloned();
                             turn_id = Some(prompt_id);
-                            turn_origin = None;
                         }
                     }
                     if let Some(origin) = Self::claude_text(value, "turnOrigin").or_else(|| {
@@ -746,6 +749,9 @@ impl Conversations {
                             .get("origin")
                             .and_then(|origin| Self::claude_text(origin, "kind"))
                     }) {
+                        if let Some(turn) = &turn_id {
+                            turn_origins.insert(turn.clone(), origin.clone());
+                        }
                         turn_origin = Some(origin);
                     }
                     if !*is_agent {
