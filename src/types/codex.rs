@@ -151,6 +151,8 @@ pub struct CodexResponseItem {
     pub response_id: Option<String>,
     pub status: Option<String>,
     pub channel: Option<String>,
+    /// Current rollouts' name for `channel`: `commentary` or `final_answer`.
+    pub phase: Option<String>,
     pub error: Option<serde_json::Value>,
     pub usage: Option<serde_json::Value>,
     // function_call_output

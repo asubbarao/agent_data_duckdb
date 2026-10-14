@@ -1,0 +1,163 @@
+# name: test/sql/unified_columns.test
+# description: Claude fills the unified columns its transcripts carry; session-level records apply to the whole session; Codex keeps a forked rollout's identity
+# group: [agent_data]
+
+require agent_data
+
+# ── Claude: per-record fields ──
+
+# Assistant turns carry the API response id, effort, thinking tokens and the
+# response usage scope. A line whose only block is thinking is one thinking
+# row that keeps the line's usage, not an empty assistant row beside it.
+query IIIIIIIII
+SELECT line_number, message_type, message_content, response_id, reasoning_effort, reasoning_tokens, usage_scope, usage_source_line, model_provider
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE file_name = 'aaaa1111-0000-4000-8000-000000000001.jsonl' AND message_type IN ('assistant', 'thinking')
+ORDER BY line_number, message_type;
+----
+3	thinking	Look for the test first.	msg_011	medium	30	response	3	anthropic
+4	assistant	(empty)	msg_011	medium	30	response	4	anthropic
+17	assistant	Fixed.	msg_012	high	0	response	17	anthropic
+
+# Redacted thinking (signature only) is a thinking row with NULL content.
+query IIII
+SELECT message_type, message_content, response_id, reasoning_effort
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE is_agent AND message_type = 'thinking';
+----
+thinking	NULL	msg_022	low
+
+# No assistant row is an empty reply.
+query I
+SELECT record_id FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE message_type = 'assistant' AND nullif(trim(message_content), '') IS NULL AND tool_name IS NULL;
+----
+
+# A turn starts at the user record with a new promptId; replies and tool
+# results belong to it, and turnOrigin says what started it.
+query IIIII
+SELECT line_number, message_type, turn_id, root_turn_id, thread_source
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE file_name = 'aaaa1111-0000-4000-8000-000000000001.jsonl' AND message_type IN ('user', 'assistant', 'tool_result', 'system')
+ORDER BY line_number;
+----
+2	user	prompt-1	prompt-1	human
+4	assistant	prompt-1	prompt-1	human
+5	tool_result	prompt-1	prompt-1	human
+15	system	prompt-1	prompt-1	human
+16	user	prompt-2	prompt-2	task_notification
+17	assistant	prompt-2	prompt-2	task_notification
+
+# event_type is the record's own type, or a system record's subtype; a
+# compaction boundary links across the summary with logicalParentUuid, and
+# last-prompt names its leaf message. The system payload is in metadata.record.
+query IIIII
+SELECT line_number, event_type, parent_uuid, message_content, metadata->'record'->'compactMetadata'->>'trigger'
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE file_name = 'aaaa1111-0000-4000-8000-000000000001.jsonl' AND event_type IN ('compact_boundary', 'last-prompt')
+ORDER BY line_number;
+----
+15	compact_boundary	u-2	Conversation compacted	auto
+18	last-prompt	a-3	Find the flaky test.	NULL
+
+# Attachments are harness context: the kind is the event, the role is system,
+# and tool_name is set only when the attachment cites a real tool call.
+query IIIII
+SELECT uuid, event_type, message_role, tool_name, tool_use_id
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE message_type = 'attachment' ORDER BY line_number;
+----
+att-1	hook_additional_context	system	Agent	toolu_011
+att-2	total_tokens_reminder	system	NULL	NULL
+
+# No attachment names a tool that is not a tool_use call in its session.
+query I
+WITH rc AS (SELECT * FROM read_conversations(path='test/data_claude_unified', source='claude'))
+SELECT a.record_id FROM rc a
+ANTI JOIN rc t ON t.message_type = 'assistant' AND t.session_id = a.session_id
+    AND t.tool_use_id = a.tool_use_id AND t.tool_name = a.tool_name
+WHERE a.message_type = 'attachment' AND a.tool_name IS NOT NULL;
+----
+
+# ── Claude: session-level records apply to every row of the session ──
+
+# agent-name, agent-setting, pr-link and bridge-session have no uuid; their
+# facts land on every row of the main transcript, and continued-in in the
+# earlier session makes this one its continuation.
+query IIIIIIIII
+SELECT DISTINCT agent_nickname, agent_role, repository, channel, forked_from_session_id, session_created_at, session_updated_at, cwd, originator
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE file_name = 'aaaa1111-0000-4000-8000-000000000001.jsonl';
+----
+flaky-test-hunt	claude	testuser/project-unified	cse_01UnifiedBridge	aaaa0000-0000-4000-8000-000000000000	2026-10-03T10:00:00.000Z	2026-10-03T10:03:05.000Z	/Users/testuser/project-unified	cli
+
+# The session titles, modes and PR links are kept in metadata.session.
+query IIIII
+SELECT DISTINCT metadata->'session'->>'customTitle', metadata->'session'->>'aiTitle', metadata->'session'->>'mode', metadata->'session'->>'permissionMode', json_array_length(metadata->'session'->'prLinks')
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE file_name = 'aaaa1111-0000-4000-8000-000000000001.jsonl';
+----
+Flaky test hunt	Find the flaky test	normal	acceptEdits	1
+
+# The earlier session is not itself a continuation.
+query II
+SELECT DISTINCT forked_from_session_id, agent_nickname
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE file_name = 'aaaa0000-0000-4000-8000-000000000000.jsonl';
+----
+NULL	NULL
+
+# ── Claude: a subagent takes its role and name from its meta.json, and its
+# root turn is the parent turn whose tool call spawned it ──
+query IIIIIII
+SELECT DISTINCT agent_role, agent_nickname, root_turn_id, repository, channel, forked_from_session_id, metadata->'session'->'subagent'->>'toolUseId'
+FROM read_conversations(path='test/data_claude_unified', source='claude')
+WHERE is_agent;
+----
+Explore	scout	prompt-1	testuser/project-unified	cse_01UnifiedBridge	NULL	toolu_011
+
+# record_id is unique per row, the split thinking row included.
+query I
+SELECT record_id FROM read_conversations(path='test/data_claude_unified', source='claude')
+QUALIFY row_number() OVER (PARTITION BY record_id) > 1;
+----
+
+# ── Whole schema, one statement over every column: none is entirely NULL or
+# blank except the ones Claude does not
+# record at all (git_commit, archived) or that a clean fixture cannot have
+# (parse_error). ──
+query I
+SELECT column_name FROM (SUMMARIZE (SELECT nullif(trim(COLUMNS(*)::VARCHAR), '') FROM read_conversations(path='test/data_claude_unified', source='claude')))
+WHERE null_percentage = 100 ORDER BY column_name;
+----
+archived
+git_commit
+parse_error
+
+# ── Codex: a spawned rollout replays its parent's session_meta; the child
+# keeps its own identity and fork pointer ──
+query IIIIIII
+SELECT DISTINCT session_id, is_agent, parent_session_id, forked_from_session_id, agent_nickname, agent_role, root_turn_id
+FROM read_conversations(path='test/data_codex_unified', source='codex');
+----
+unified-child	true	unified-root	unified-root	Noether	explorer	turn-root-1
+
+# Current rollouts name the message channel `phase`.
+query II
+SELECT uuid, channel FROM read_conversations(path='test/data_codex_unified', source='codex')
+WHERE channel IS NOT NULL ORDER BY line_number;
+----
+item-unified-commentary	commentary
+item-unified-final	final_answer
+
+# Codex whole schema: cache-creation tokens and parent item ids are not in
+# Codex rollouts, project_dir is Claude's encoded projects/ directory, and the
+# fixture has no parse errors.
+query I
+SELECT column_name FROM (SUMMARIZE (SELECT nullif(trim(COLUMNS(*)::VARCHAR), '') FROM read_conversations(path='test/data_codex_unified', source='codex')))
+WHERE null_percentage = 100 ORDER BY column_name;
+----
+cache_creation_tokens
+parent_uuid
+parse_error
+project_dir

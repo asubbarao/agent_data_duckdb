@@ -9,6 +9,7 @@ use crate::types::grok::*;
 use crate::utils;
 use crate::vtab::{self, ColDef, TableFunc};
 use duckdb::core::DataChunkHandle;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -83,6 +84,96 @@ pub struct ConversationRow {
     // Event-message copies can precede their canonical response_item. Keep the
     // row long enough for later completion/usage correlation, then omit it.
     suppress_output: bool,
+    // Claude: the record's own unmapped fields, held until the file's
+    // session-level facts are known and both are written to `metadata`.
+    pending_record: Option<serde_json::Value>,
+}
+
+/// Session-level facts Claude records as their own transcript lines
+/// (`agent-name`, `pr-link`, `bridge-session`, ...). They carry no uuid and
+/// describe the whole session, so they are applied to every row of it.
+#[derive(Default, Clone)]
+struct ClaudeSessionFacts {
+    agent_name: Option<String>,
+    agent_setting: Option<String>,
+    repository: Option<String>,
+    bridge_session_id: Option<String>,
+    custom_title: Option<String>,
+    ai_title: Option<String>,
+    mode: Option<String>,
+    permission_mode: Option<String>,
+    session_kind: Option<String>,
+    pr_links: Vec<serde_json::Value>,
+    worktree: Option<serde_json::Value>,
+    continued_in: Option<String>,
+}
+
+impl ClaudeSessionFacts {
+    fn absorb(&mut self, record_type: &str, value: &serde_json::Value) {
+        let text = |key: &str| Conversations::claude_text(value, key);
+        if let Some(kind) = text("sessionKind") {
+            self.session_kind = Some(kind);
+        }
+        match record_type {
+            "agent-name" => self.agent_name = text("agentName").or(self.agent_name.take()),
+            "agent-setting" => {
+                self.agent_setting = text("agentSetting").or(self.agent_setting.take())
+            }
+            "pr-link" => {
+                self.repository = text("prRepository").or(self.repository.take());
+                let mut link = serde_json::Map::new();
+                for key in ["prNumber", "prUrl", "prRepository", "timestamp"] {
+                    if let Some(field) = value.get(key) {
+                        link.insert(key.to_string(), field.clone());
+                    }
+                }
+                self.pr_links.push(serde_json::Value::Object(link));
+            }
+            "bridge-session" => {
+                self.bridge_session_id = text("bridgeSessionId").or(self.bridge_session_id.take())
+            }
+            "custom-title" => self.custom_title = text("customTitle").or(self.custom_title.take()),
+            "ai-title" => self.ai_title = text("aiTitle").or(self.ai_title.take()),
+            "mode" => self.mode = text("mode").or(self.mode.take()),
+            "permission-mode" => {
+                self.permission_mode = text("permissionMode").or(self.permission_mode.take())
+            }
+            "worktree-state" => {
+                if let Some(state) = value.get("worktreeSession").filter(|v| !v.is_null()) {
+                    self.worktree = Some(state.clone());
+                }
+            }
+            "continued-in" => {
+                self.continued_in = text("continuedInSessionId").or(self.continued_in.take())
+            }
+            _ => {}
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut out = serde_json::Map::new();
+        let mut put = |key: &str, value: &Option<String>| {
+            if let Some(value) = value {
+                out.insert(key.to_string(), serde_json::Value::String(value.clone()));
+            }
+        };
+        put("agentName", &self.agent_name);
+        put("agentSetting", &self.agent_setting);
+        put("bridgeSessionId", &self.bridge_session_id);
+        put("customTitle", &self.custom_title);
+        put("aiTitle", &self.ai_title);
+        put("mode", &self.mode);
+        put("permissionMode", &self.permission_mode);
+        put("sessionKind", &self.session_kind);
+        put("continuedInSessionId", &self.continued_in);
+        if !self.pr_links.is_empty() {
+            out.insert("prLinks".to_string(), serde_json::Value::Array(self.pr_links.clone()));
+        }
+        if let Some(worktree) = &self.worktree {
+            out.insert("worktreeSession".to_string(), worktree.clone());
+        }
+        out
+    }
 }
 
 pub struct Conversations;
@@ -318,16 +409,49 @@ impl Conversations {
                 row.cache_read_tokens = usage.and_then(|u| u.cache_read_input_tokens);
                 row.stop_reason = msg_content.and_then(|m| m.stop_reason.clone());
 
-                let mut rows = vec![row.clone()];
-                if let Some(blocks) = msg_content.and_then(|m| m.content.as_ref()) {
-                    for thinking in blocks.iter().filter_map(|block| match block {
-                        ContentBlock::Thinking { thinking }
-                            if thinking.as_deref().is_some_and(|text| !text.is_empty()) =>
-                        {
-                            thinking.clone()
+                let blocks = msg_content
+                    .and_then(|m| m.content.as_ref())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let answers = blocks
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::Text { .. } | ContentBlock::ToolUse { .. }));
+                let thinking_blocks: Vec<Option<String>> = blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Thinking { thinking } => {
+                            Some(thinking.clone().filter(|text| !text.is_empty()))
                         }
                         _ => None,
-                    }) {
+                    })
+                    .collect();
+                // Claude writes each content block as its own line. A line
+                // whose only block is thinking is a thinking row, not an empty
+                // assistant reply: redacted thinking (signature only) keeps its
+                // usage, effort and response id with NULL content.
+                if !answers && !thinking_blocks.is_empty() {
+                    return thinking_blocks
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, thinking)| {
+                            let mut thinking_row = row.clone();
+                            thinking_row.message_type = "thinking".to_string();
+                            thinking_row.message_content = thinking;
+                            if index > 0 {
+                                thinking_row.input_tokens = None;
+                                thinking_row.output_tokens = None;
+                                thinking_row.cache_creation_tokens = None;
+                                thinking_row.cache_read_tokens = None;
+                                thinking_row.stop_reason = None;
+                            }
+                            thinking_row
+                        })
+                        .collect();
+                }
+
+                let mut rows = vec![row.clone()];
+                {
+                    for thinking in thinking_blocks.into_iter().flatten() {
                         let mut thinking_row = row.clone();
                         thinking_row.message_type = "thinking".to_string();
                         thinking_row.message_content = Some(thinking);
@@ -355,7 +479,11 @@ impl Conversations {
                     line_number,
                     "system",
                 );
-                row.message_content = s.content.as_ref().map(utils::extract_text_content);
+                row.message_content = s
+                    .content
+                    .as_ref()
+                    .map(utils::extract_text_content)
+                    .filter(|text| !text.trim().is_empty());
                 vec![row]
             }
             ConversationMessage::Summary(s) => {
@@ -420,12 +548,16 @@ impl Conversations {
             &msg.record_type,
         );
         if msg.record_type == "attachment" {
-            row.tool_name = msg
+            // Attachments are harness-injected context (hook output,
+            // reminders, environment, skill listings), not tool calls. Their
+            // kind is the event_type; a hook's toolUseID is kept as a
+            // candidate link and resolved against the session's real tool
+            // calls once the whole session is read.
+            row.message_role = Some("system".to_string());
+            row.tool_use_id = msg
                 .attachment
                 .as_ref()
-                .and_then(|attachment| attachment.get("type"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string);
+                .and_then(|attachment| Self::claude_text(attachment, "toolUseID"));
             row.message_content = msg
                 .rendered
                 .as_ref()
@@ -458,9 +590,10 @@ impl Conversations {
     fn load_claude_rows(
         base_path: &std::path::Path,
         retain_raw_event: bool,
+        retain_metadata: bool,
     ) -> Vec<ConversationRow> {
         let files = utils::discover_conversation_files(base_path);
-        Self::load_claude_jsonl_rows("claude", &files, retain_raw_event)
+        Self::load_claude_jsonl_rows("claude", &files, retain_raw_event, retain_metadata)
     }
 
     /// Claude Desktop ("Cowork") stores transcripts using the same camelCase
@@ -469,9 +602,10 @@ impl Conversations {
     fn load_claude_desktop_rows(
         base_path: &std::path::Path,
         retain_raw_event: bool,
+        retain_metadata: bool,
     ) -> Vec<ConversationRow> {
         let files = utils::discover_claude_desktop_files(base_path);
-        Self::load_claude_jsonl_rows("claude-desktop", &files, retain_raw_event)
+        Self::load_claude_jsonl_rows("claude-desktop", &files, retain_raw_event, retain_metadata)
     }
 
     /// Parse a set of discovered Claude-schema JSONL transcript files into rows.
@@ -480,8 +614,14 @@ impl Conversations {
         source: &str,
         files: &[(String, bool, std::path::PathBuf)],
         retain_raw_event: bool,
+        retain_metadata: bool,
     ) -> Vec<ConversationRow> {
         let mut rows = Vec::new();
+        // Facts from main transcripts, keyed by session id. Subagent files
+        // carry their parent's sessionId, so their facts come from the
+        // `agent-*.meta.json` written beside them instead.
+        let mut session_facts: HashMap<String, ClaudeSessionFacts> = HashMap::new();
+        let mut subagent_meta: HashMap<String, serde_json::Value> = HashMap::new();
 
         for (project_dir, is_agent, file_path) in files {
             let file_name = file_path
@@ -498,9 +638,20 @@ impl Conversations {
             let (nested_parent_session_id, agent_path) =
                 Self::claude_agent_evidence(file_path, *is_agent);
 
+            let file_path_text = file_path.to_string_lossy().into_owned();
+            if *is_agent {
+                if let Some(meta) = Self::claude_subagent_meta(file_path) {
+                    subagent_meta.insert(file_path_text.clone(), meta);
+                }
+            }
+
             let file_rows_start = rows.len();
             let mut file_cwd: Option<String> = None;
             let mut file_line: i64 = 0;
+            // A turn starts at the user record carrying a new promptId; the
+            // rows after it, replies and tool results included, belong to it.
+            let mut turn_id: Option<String> = None;
+            let mut turn_origin: Option<String> = None;
 
             let mut reader = BufReader::new(file);
             let mut raw_bytes = Vec::new();
@@ -530,21 +681,25 @@ impl Conversations {
                 // Read the native sessionId even for an unsupported record.  It
                 // is the only parent evidence available in a flat legacy
                 // agent-*.jsonl transcript; nested agents use their directory.
+                // Parse once as JSON: the typed record drives the row shape and
+                // the same value supplies the fields the typed record omits.
+                let value = serde_json::from_str::<serde_json::Value>(&line)
+                    .ok()
+                    .filter(serde_json::Value::is_object);
                 let native_session_id = if *is_agent && nested_parent_session_id.is_none() {
-                    serde_json::from_str::<serde_json::Value>(&line)
-                        .ok()
-                        .and_then(|value| {
-                            value
-                                .get("sessionId")
-                                .and_then(|session_id| session_id.as_str())
-                                .filter(|session_id| !session_id.is_empty())
-                                .map(str::to_string)
-                        })
+                    value
+                        .as_ref()
+                        .and_then(|value| Self::claude_text(value, "sessionId"))
                 } else {
                     None
                 };
+                let record = match value.as_ref().map(ConversationRecord::deserialize) {
+                    Some(Ok(record)) => Ok(record),
+                    // Re-parse from text so the error keeps its line/column.
+                    _ => serde_json::from_str::<ConversationRecord>(&line),
+                };
 
-                let parsed_rows = match serde_json::from_str::<ConversationRecord>(&line) {
+                let parsed_rows = match record {
                     Ok(ConversationRecord::Known(msg)) => Self::claude_message_to_row(
                         source,
                         msg,
@@ -579,8 +734,45 @@ impl Conversations {
                     }
                 };
 
-                for mut row in parsed_rows {
-                    row.file_path = Some(file_path.to_string_lossy().into_owned());
+                if let Some(value) = value.as_ref() {
+                    if let Some(prompt_id) = Self::claude_text(value, "promptId") {
+                        if turn_id.as_deref() != Some(prompt_id.as_str()) {
+                            turn_id = Some(prompt_id);
+                            turn_origin = None;
+                        }
+                    }
+                    if let Some(origin) = Self::claude_text(value, "turnOrigin").or_else(|| {
+                        value
+                            .get("origin")
+                            .and_then(|origin| Self::claude_text(origin, "kind"))
+                    }) {
+                        turn_origin = Some(origin);
+                    }
+                    if !*is_agent {
+                        if let Some(record_type) = Self::claude_text(value, "type") {
+                            let session = Self::claude_text(value, "sessionId")
+                                .unwrap_or_else(|| file_session_id.clone());
+                            session_facts
+                                .entry(session)
+                                .or_default()
+                                .absorb(&record_type, value);
+                        }
+                    }
+                }
+
+                for (sub_index, mut row) in parsed_rows.into_iter().enumerate() {
+                    if let Some(value) = value.as_ref() {
+                        Self::enrich_claude_row(
+                            &mut row,
+                            value,
+                            file_line,
+                            sub_index,
+                            retain_metadata,
+                        );
+                    }
+                    row.turn_id = turn_id.clone();
+                    row.thread_source = turn_origin.clone();
+                    row.file_path = Some(file_path_text.clone());
                     row.byte_offset = Some(line_offset);
                     row.ordinal = Some(file_line.saturating_sub(1));
                     if retain_raw_event {
@@ -600,6 +792,8 @@ impl Conversations {
                 }
             }
 
+            Self::carry_claude_environment(&mut rows[file_rows_start..]);
+
             if let Some(ref cwd) = file_cwd {
                 let fallback = utils::decode_project_path(project_dir);
                 for row in &mut rows[file_rows_start..] {
@@ -609,7 +803,271 @@ impl Conversations {
                 }
             }
         }
+        Self::apply_claude_session_facts(&mut rows, &session_facts, &subagent_meta, retain_metadata);
         rows
+    }
+
+    /// Session-state records (mode, pr-link, queue-operation, ...) carry no
+    /// cwd, branch, version or entrypoint, but they happen inside the same
+    /// session as the records around them. Like Codex's session_meta and
+    /// turn_context, the most recent value applies to the rows after it; rows
+    /// before the first one take the first value in the file.
+    fn carry_claude_environment(rows: &mut [ConversationRow]) {
+        fn carry(
+            rows: &mut [ConversationRow],
+            field: fn(&mut ConversationRow) -> &mut Option<String>,
+        ) {
+            let mut current: Option<String> = None;
+            let mut first: Option<String> = None;
+            for row in rows.iter_mut() {
+                let value = field(row);
+                match value {
+                    Some(seen) => {
+                        current = Some(seen.clone());
+                        first.get_or_insert_with(|| seen.clone());
+                    }
+                    None => *value = current.clone(),
+                }
+            }
+            for row in rows.iter_mut() {
+                let value = field(row);
+                if value.is_some() {
+                    break;
+                }
+                *value = first.clone();
+            }
+        }
+        carry(rows, |row| &mut row.cwd);
+        carry(rows, |row| &mut row.slug);
+        carry(rows, |row| &mut row.git_branch);
+        carry(rows, |row| &mut row.version);
+        carry(rows, |row| &mut row.client);
+        carry(rows, |row| &mut row.originator);
+    }
+
+    fn claude_text(value: &serde_json::Value, key: &str) -> Option<String> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    }
+
+    /// `agent-<id>.meta.json` beside a nested subagent transcript names the
+    /// agent type it was spawned as and the parent tool call that spawned it.
+    fn claude_subagent_meta(file_path: &Path) -> Option<serde_json::Value> {
+        let stem = file_path.file_stem()?.to_string_lossy().into_owned();
+        let meta_path = file_path.with_file_name(format!("{stem}.meta.json"));
+        let text = std::fs::read_to_string(meta_path).ok()?;
+        serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .filter(serde_json::Value::is_object)
+    }
+
+    /// Fill the unified columns from the record's own fields. The typed
+    /// record shapes the row; these fields are read from the same JSON value.
+    fn enrich_claude_row(
+        row: &mut ConversationRow,
+        value: &serde_json::Value,
+        line_number: i64,
+        sub_index: usize,
+        retain_metadata: bool,
+    ) {
+        let record_type = Self::claude_text(value, "type");
+        // A system record's subtype (stop_hook_summary, turn_duration,
+        // compact_boundary, api_error, ...) is its event; its payload fields
+        // (hookInfos, durationMs, compactMetadata, ...) stay in metadata.record.
+        row.event_type = match record_type.as_deref() {
+            Some("system") => Self::claude_text(value, "subtype").or(record_type.clone()),
+            Some("attachment") => value
+                .get("attachment")
+                .and_then(|attachment| Self::claude_text(attachment, "type"))
+                .or(record_type.clone()),
+            _ => record_type.clone(),
+        };
+        row.originator = row.client.clone();
+        row.model_provider = Some("anthropic".to_string());
+        if row.parent_uuid.is_none() {
+            // Compaction boundaries point across the summary with
+            // logicalParentUuid; last-prompt names the leaf it resumes from.
+            row.parent_uuid = Self::claude_text(value, "logicalParentUuid")
+                .or_else(|| Self::claude_text(value, "leafUuid"));
+        }
+        if row.message_content.is_none() && record_type.as_deref() == Some("last-prompt") {
+            row.message_content = Self::claude_text(value, "lastPrompt");
+        }
+
+        let message = value.get("message");
+        if matches!(row.message_type.as_str(), "assistant" | "thinking") {
+            row.response_id = message
+                .and_then(|message| Self::claude_text(message, "id"))
+                .or_else(|| Self::claude_text(value, "requestId"));
+        }
+        row.reasoning_effort = Self::claude_text(value, "perTurnEffort")
+            .or_else(|| Self::claude_text(value, "effort"));
+        if row.input_tokens.is_some() || row.output_tokens.is_some() {
+            row.reasoning_tokens = message
+                .and_then(|message| message.pointer("/usage/output_tokens_details/thinking_tokens"))
+                .and_then(serde_json::Value::as_i64);
+            row.usage_scope = Some("response".to_string());
+            row.usage_source_line = Some(line_number);
+        }
+
+        // Claude reuses uuids across files (resumed and relocated sessions
+        // copy history), so the transcript position is the identity: stable
+        // when the Claude home moves, unique per emitted row.
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{line_number}\u{1f}{sub_index}",
+            row.session_id, row.project_dir, row.file_name
+        )
+        .bytes()
+        {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        row.record_id = Some(format!("claude:{hash:016x}"));
+
+        if retain_metadata {
+            // Everything the columns do not already carry, minus the bulky
+            // bodies that message_content, tool_input and raw_event hold.
+            let mut record = value.as_object().cloned().unwrap_or_default();
+            for key in [
+                "message",
+                "content",
+                "toolUseResult",
+                "attachment",
+                "rendered",
+                "snapshot",
+                "uuid",
+                "parentUuid",
+                "sessionId",
+                "timestamp",
+                "cwd",
+                "version",
+                "gitBranch",
+                "slug",
+                "type",
+            ] {
+                record.remove(key);
+            }
+            if let Some(stop_reason) = message.and_then(|message| message.get("stop_reason")) {
+                record.insert("stop_reason".to_string(), stop_reason.clone());
+            }
+            row.pending_record = Some(serde_json::Value::Object(record));
+        }
+    }
+
+    /// Apply the session-level facts to every row of their session, and the
+    /// subagent's own meta.json to the rows of its transcript.
+    fn apply_claude_session_facts(
+        rows: &mut [ConversationRow],
+        session_facts: &HashMap<String, ClaudeSessionFacts>,
+        subagent_meta: &HashMap<String, serde_json::Value>,
+        retain_metadata: bool,
+    ) {
+        // `continued-in` is written in the old session and names the new one.
+        let mut continued_from: HashMap<&str, &str> = HashMap::new();
+        let mut sessions: Vec<&String> = session_facts.keys().collect();
+        sessions.sort();
+        for session in sessions {
+            if let Some(next) = session_facts[session].continued_in.as_deref() {
+                continued_from.entry(next).or_insert(session.as_str());
+            }
+        }
+
+        // Session span across the main transcript and its subagents. ISO-8601
+        // UTC strings order lexically.
+        let mut span: HashMap<String, (String, String)> = HashMap::new();
+        // The parent turn that issued each tool call, for subagent root turns.
+        let mut tool_turns: HashMap<(String, String), String> = HashMap::new();
+        // Every tool call in the session, by id, for attachments that cite one.
+        let mut tool_names: HashMap<(String, String), String> = HashMap::new();
+        for row in rows.iter() {
+            if row.message_type == "assistant" {
+                if let (Some(tool_use_id), Some(tool_name)) = (&row.tool_use_id, &row.tool_name) {
+                    tool_names
+                        .entry((row.session_id.clone(), tool_use_id.clone()))
+                        .or_insert_with(|| tool_name.clone());
+                }
+            }
+            if let Some(ts) = row.timestamp.as_deref().filter(|ts| !ts.is_empty()) {
+                span.entry(row.session_id.clone())
+                    .and_modify(|(first, last)| {
+                        if ts < first.as_str() {
+                            *first = ts.to_string();
+                        }
+                        if ts > last.as_str() {
+                            *last = ts.to_string();
+                        }
+                    })
+                    .or_insert_with(|| (ts.to_string(), ts.to_string()));
+            }
+            if !row.is_agent && row.message_type == "assistant" {
+                // Rewound or compacted sessions replay earlier tool calls
+                // later in the file; the first occurrence is the issuing turn.
+                if let (Some(tool_use_id), Some(turn_id)) = (&row.tool_use_id, &row.turn_id) {
+                    tool_turns
+                        .entry((row.session_id.clone(), tool_use_id.clone()))
+                        .or_insert_with(|| turn_id.clone());
+                }
+            }
+        }
+
+        let empty = ClaudeSessionFacts::default();
+        for row in rows.iter_mut() {
+            if row.message_type == "attachment" {
+                let cited = row
+                    .tool_use_id
+                    .take()
+                    .map(|id| (row.session_id.clone(), id))
+                    .and_then(|key| tool_names.get(&key).map(|name| (key.1, name.clone())));
+                if let Some((tool_use_id, tool_name)) = cited {
+                    row.tool_use_id = Some(tool_use_id);
+                    row.tool_name = Some(tool_name);
+                }
+            }
+            let facts = session_facts.get(&row.session_id).unwrap_or(&empty);
+            if let Some((first, last)) = span.get(&row.session_id) {
+                row.session_created_at = Some(first.clone());
+                row.session_updated_at = Some(last.clone());
+            }
+            row.repository = facts.repository.clone();
+            row.channel = facts.bridge_session_id.clone();
+
+            let meta = row
+                .file_path
+                .as_ref()
+                .filter(|_| row.is_agent)
+                .and_then(|path| subagent_meta.get(path));
+            if row.is_agent {
+                row.agent_role = meta.and_then(|meta| Self::claude_text(meta, "agentType"));
+                row.agent_nickname = meta.and_then(|meta| Self::claude_text(meta, "name"));
+                row.root_turn_id = meta
+                    .and_then(|meta| Self::claude_text(meta, "toolUseId"))
+                    .and_then(|tool_use_id| {
+                        tool_turns.get(&(row.session_id.clone(), tool_use_id)).cloned()
+                    });
+            } else {
+                row.agent_role = facts.agent_setting.clone();
+                row.agent_nickname = facts.agent_name.clone();
+                row.forked_from_session_id = continued_from
+                    .get(row.session_id.as_str())
+                    .map(|session| session.to_string());
+                row.root_turn_id = row.turn_id.clone();
+            }
+
+            if retain_metadata {
+                let mut session = facts.to_json();
+                if let Some(meta) = meta {
+                    session.insert("subagent".to_string(), meta.clone());
+                }
+                let record = row.pending_record.take().unwrap_or(serde_json::Value::Null);
+                row.metadata = Some(
+                    serde_json::json!({"session": session, "record": record}).to_string(),
+                );
+            }
+        }
     }
 
     /// Return the relationship evidence carried by Claude's transcript path.
@@ -966,6 +1424,18 @@ impl Conversations {
                     "session_meta" => {
                         let (parsed_meta, diagnostics) =
                             CodexSessionMeta::from_value_tolerant(&parsed.payload);
+                        // A forked or spawned rollout replays its parent's
+                        // history, including the parent's own session_meta.
+                        // That record describes the parent thread, not this
+                        // file: adopting it would relabel the child's rows
+                        // with the parent's id and drop its fork pointer.
+                        let replayed = matches!(
+                            (meta.id.as_deref(), parsed_meta.id.as_deref()),
+                            (Some(current), Some(next)) if current != next
+                        );
+                        if replayed {
+                            continue;
+                        }
                         meta = parsed_meta;
                         index_metadata =
                             index.metadata_for(meta.id.as_deref().unwrap_or(session_uuid));
@@ -1552,7 +2022,9 @@ impl Conversations {
                     row.response_id = item.response_id.clone().or_else(|| row.response_id.clone());
                     row.turn_id = Self::codex_turn_id(&parsed.payload).or(row.turn_id);
                     row.status = item.status.clone();
-                    row.channel = item.channel.clone();
+                    // Older rollouts wrote `channel`; current ones write the
+                    // same commentary/final distinction as `phase`.
+                    row.channel = item.channel.clone().or_else(|| item.phase.clone());
                     if matches!(
                         row.message_type.as_str(),
                         "assistant" | "agent_message" | "reasoning"
@@ -1768,8 +2240,8 @@ impl Conversations {
             .or_else(|| Self::codex_turn_id(&parsed.payload))
             .or(base.turn_id);
         base.root_turn_id = Self::json_string(item, &["root_turn_id"]).or(base.root_turn_id);
-        base.channel = Self::json_string(item, &["channel"])
-            .or_else(|| Self::json_string(&parsed.payload, &["channel"]));
+        base.channel = Self::json_string(item, &["channel", "phase"])
+            .or_else(|| Self::json_string(&parsed.payload, &["channel", "phase"]));
         base.status = Self::json_string(item, &["status", "phase"])
             .or_else(|| Self::json_string(&parsed.payload, &["status", "phase"]));
         base.record_id = Some(Self::codex_record_id(
@@ -3019,12 +3491,15 @@ impl Conversations {
         path: Option<&str>,
         source: Option<&str>,
         retain_raw_event: bool,
+        retain_metadata: bool,
     ) -> Vec<ConversationRow> {
         let base_path = utils::resolve_data_path(path);
         match detect::resolve_provider(&base_path, source) {
-            Provider::Claude => Self::load_claude_rows(&base_path, retain_raw_event),
+            Provider::Claude => {
+                Self::load_claude_rows(&base_path, retain_raw_event, retain_metadata)
+            }
             Provider::ClaudeDesktop => {
-                Self::load_claude_desktop_rows(&base_path, retain_raw_event)
+                Self::load_claude_desktop_rows(&base_path, retain_raw_event, retain_metadata)
             }
             Provider::Copilot => Self::load_copilot_rows(&base_path),
             Provider::Cursor => Self::load_cursor_rows(&base_path),
@@ -3103,7 +3578,7 @@ impl TableFunc for Conversations {
     }
 
     fn load_rows(path: Option<&str>, source: Option<&str>) -> Vec<ConversationRow> {
-        Self::load_rows_with_options(path, source, true)
+        Self::load_rows_with_options(path, source, true, true)
     }
 
     fn supports_include_archived() -> bool {
@@ -3144,6 +3619,7 @@ impl TableFunc for Conversations {
                 path,
                 source,
                 projected_columns.contains(&55),
+                projected_columns.contains(&56),
             )),
         }
     }

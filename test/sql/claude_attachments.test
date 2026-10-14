@@ -4,14 +4,16 @@
 
 require agent_data
 
-query TTTT
-SELECT uuid, message_type, tool_name, replace(message_content, chr(10), '|')
+# The attachment kind is the event; attachments are harness context, so they
+# are not tool rows and their role is system.
+query TTTTTT
+SELECT uuid, message_type, event_type, message_role, tool_name, replace(message_content, E'\n', '|')
 FROM read_conversations(path='test/data_claude_attachments')
 WHERE message_type = 'attachment'
 ORDER BY uuid;
 ----
-attachment-environment	attachment	environment	Injected environment context.
-attachment-hook	attachment	hook_success	Hook completed successfully.|Additional rendered line.
+attachment-environment	attachment	environment	system	NULL	Injected environment context.
+attachment-hook	attachment	hook_success	system	NULL	Hook completed successfully.|Additional rendered line.
 
 # Payload fields are not substituted for rendered text.
 query I
