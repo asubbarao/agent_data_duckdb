@@ -124,6 +124,7 @@ All functions accept two optional parameters:
 - **`path`** — data directory path (default: `~/.claude` for legacy no-argument calls; `source='codex'` uses `CODEX_HOME` or `~/.codex`). Auto-detected from folder structure (`local-agent-mode-sessions/` → Claude Desktop, `projects/` → Claude, `session-state/` → Copilot, a `state.vscdb` file → Cursor, `sessions/<YYYY>/` → Codex, `tmp/` + `installation_id` → Gemini CLI, `sessions/<%encoded-cwd>/` → Grok). An explicit Codex path can name its home, sessions directory, or one rollout file. Grok lives at `~/.grok`, so pass `path='~/.grok'` (or `source='grok'`).
 - **`source`** — explicit provider override: `'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`. Use when auto-detection fails or for non-standard directory layouts.
 - **`include_archived`** — for Codex directory discovery, include `archived_sessions/` (default `false`).
+- **`modified_after`** — `read_conversations` and `read_events` only: a `TIMESTAMP` (UTC). Discovery skips every transcript file last modified at or before it, so an incremental load reads only changed files: `read_conversations(source := 'claude', modified_after := TIMESTAMP '2026-10-08 18:00')`. A changed file is read whole (Codex rollouts and Claude transcripts are appended to), so dedupe on `uuid`. `NULL` means no cutoff.
 
 Every table includes a **`source`** column (`'claude'`, `'claude-desktop'`, `'copilot'`, `'cursor'`, `'codex'`, `'gemini'`, or `'grok'`) as the first column.
 

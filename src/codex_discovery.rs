@@ -196,6 +196,9 @@ fn add_file(
     seen: &mut HashSet<PathBuf>,
     out: &mut Vec<CodexDiscoveredFile>,
 ) {
+    if !utils::passes_modified_after(path) {
+        return;
+    }
     let canonical = match path.canonicalize() {
         Ok(path) => path,
         Err(_) => return,
