@@ -1,0 +1,132 @@
+source,record_type,concept,column,json_paths,type,transform,scope,notes
+claude,*,lines,record_type,type,VARCHAR,,row,key with file_path+line_number
+claude,*,lines,subtype,subtype|attachment.type,VARCHAR,,row,system subtype or attachment kind
+claude,*,lines,uuid,uuid,VARCHAR,,row,
+claude,*,lines,parent_uuid,parentUuid|logicalParentUuid|leafUuid,VARCHAR,,row,compact_boundary uses logicalParentUuid; summary/last-prompt use leafUuid
+claude,*,lines,ts,timestamp,VARCHAR,,row,
+claude,*,lines,session_id,sessionId|@entries.session_id,VARCHAR,,row,summary/snapshot lines carry no sessionId
+claude,*,lines,turn_id,promptId,VARCHAR,last_nonnull,carry,turn = last promptId seen in the file
+claude,*,lines,cwd,cwd,VARCHAR,last_nonnull,carry,
+claude,*,lines,git_branch,gitBranch,VARCHAR,last_nonnull,carry,
+claude,*,lines,version,version,VARCHAR,last_nonnull,carry,
+claude,*,lines,client,entrypoint,VARCHAR,last_nonnull,carry,cli / claude-desktop / sdk-cli
+claude,*,lines,is_meta,isMeta,BOOLEAN,,row,harness-written user line
+claude,user|assistant,blocks,block,message.content,JSON,unnest(from_json([BLOCK])),row,BLOCK = {type;text;thinking;signature;id;name;input:JSON;tool_use_id;content:JSON;is_error:BOOLEAN;source:{media_type}}; string content = one text block
+claude,assistant,usage,response_id,message.id|requestId,VARCHAR,,row,key: one row per API response (lines repeat it - measured 299 lines / 141 responses)
+claude,assistant,usage,model,message.model,VARCHAR,,row,
+claude,assistant,usage,input_tokens,message.usage.input_tokens,BIGINT,,row,
+claude,assistant,usage,output_tokens,message.usage.output_tokens,BIGINT,,row,
+claude,assistant,usage,cache_creation_tokens,message.usage.cache_creation_input_tokens,BIGINT,,row,
+claude,assistant,usage,cache_read_tokens,message.usage.cache_read_input_tokens,BIGINT,,row,
+claude,assistant,usage,thinking_tokens,message.usage.output_tokens_details.thinking_tokens,BIGINT,,row,
+claude,assistant,usage,stop_reason,message.stop_reason,VARCHAR,last per response_id,row,
+claude,assistant,usage,effort,perTurnEffort|effort,VARCHAR,,row,
+claude,assistant,usage,error,error|apiErrorStatus,VARCHAR,,row,API-error lines (rate_limit/429); current reader drops it
+claude,assistant,messages,text,@block.text,VARCHAR,,row,blocks where block_type=text
+claude,user,messages,text,@block.text,VARCHAR,,row,blocks where block_type=text; image blocks -> [image: media_type] if wanted
+claude,user,messages,prompt_source,promptSource|turnOrigin|origin.kind,VARCHAR,,row,sdk/system/task_notification/... (author derives from it + is_meta)
+claude,assistant,tool_calls,tool_use_id,@block.id,VARCHAR,,row,key
+claude,assistant,tool_calls,name,@block.name,VARCHAR,,row,
+claude,assistant,tool_calls,input,@block.input,JSON,,row,raw key order kept (current reader re-sorts keys)
+claude,user,tool_results,tool_use_id,@block.tool_use_id,VARCHAR,,row,key = tool_calls.tool_use_id
+claude,user,tool_results,content,@block.content,JSON,,row,string or block list
+claude,user,tool_results,is_error,@block.is_error,BOOLEAN,,row,
+claude,user,tool_results,result,toolUseResult,JSON,,row,structured result (stdout/stderr/filePath/...) - shape varies by tool so kept JSON
+claude,assistant,thinking,text,@block.thinking,VARCHAR,,row,empty string when redacted (real 2026-10 lines)
+claude,assistant,thinking,redacted,@block.type,VARCHAR,= redacted_thinking,row,
+claude,attachment,attachments,kind,attachment.type,VARCHAR,,row,
+claude,attachment,attachments,tool_use_id,attachment.toolUseID,VARCHAR,,row,hooks cite a tool call
+claude,attachment,attachments,hook_event,attachment.hookEvent,VARCHAR,,row,
+claude,attachment,attachments,text,rendered[*].content|attachment.content|attachment.text,VARCHAR,join,row,system-reminder text: html_extract_text(parse_html(text) '//system-reminder')
+claude,system|queue-operation,system_events,subtype,subtype|operation,VARCHAR,,row,
+claude,system|queue-operation,system_events,content,content,VARCHAR,,row,
+claude,system,system_events,payload,@line,JSON,,row,whole record for the long tail (stopReason/hookInfos/compactMetadata/durationMs)
+claude,agent-name,sessions,agent_name,agentName,VARCHAR,last,session,
+claude,agent-setting,sessions,agent_role,agentSetting,VARCHAR,last,session,
+claude,ai-title,sessions,title,aiTitle|title,VARCHAR,last,session,
+claude,custom-title,sessions,custom_title,customTitle,VARCHAR,last,session,
+claude,mode,sessions,mode,mode,VARCHAR,last,session,
+claude,permission-mode,sessions,permission_mode,permissionMode,VARCHAR,last,session,
+claude,pr-link,sessions,pr_repository,prRepository,VARCHAR,last,session,
+claude,pr-link,sessions,pr_url,prUrl,VARCHAR,last,session,
+claude,bridge-session,sessions,channel,bridgeSessionId,VARCHAR,last,session,
+claude,last-prompt,sessions,last_prompt,lastPrompt,VARCHAR,last,session,
+claude,continued-in,sessions,continued_in_session_id,continuedInSessionId,VARCHAR,last,session,the other session's forked_from = this session
+claude,*,sessions,cwd,cwd,VARCHAR,first,session,
+claude,*,sessions,git_branch,gitBranch,VARCHAR,last,session,
+claude,*,sessions,version,version,VARCHAR,last,session,
+claude,*,sessions,slug,slug,VARCHAR,last,session,
+claude,*,sessions,started_at,timestamp,VARCHAR,min,session,
+claude,*,sessions,ended_at,timestamp,VARCHAR,max,session,
+claude,meta.json,sessions,agent_name,name,VARCHAR,,session,subagent sidecar <agent>.meta.json read by its own entries row
+claude,meta.json,sessions,agent_role,agentType,VARCHAR,,session,
+claude,meta.json,sessions,spawn_tool_use_id,toolUseId,VARCHAR,,session,joins tool_calls -> the turn that spawned it
+codex,*,lines,record_type,type|payload.type|payload.item.type,VARCHAR,concat(/),row,e.g. response_item/message; event_msg/item_completed/McpToolCall
+codex,*,lines,ts,timestamp,VARCHAR,,row,
+codex,*,lines,ordinal,ordinal,BIGINT,,row,present in 2026-10 rollouts
+codex,*,lines,turn_id,payload.turn_id|payload.internal_chat_message_metadata_passthrough.turn_id,VARCHAR,last_nonnull,carry,
+codex,*,lines,root_turn_id,payload.root_turn_id|payload.turn_attribution.root_turn_id,VARCHAR,last_nonnull,carry,
+codex,*,lines,uuid,payload.id|payload.item.id,VARCHAR,,row,
+codex,response_item/message,blocks,block,payload.content,JSON,unnest(from_json([{type;text;image_url}])),row,input_text/output_text/input_image
+codex,event_msg/item_completed/UserMessage|AgentMessage,blocks,block,payload.item.content,JSON,unnest,row,same block shape; duplicate of the response_item copy
+codex,session_meta,sessions,session_id,payload.id,VARCHAR,first,session,FIRST session_meta: forked children replay the parent's second (measured 2026-10-13)
+codex,session_meta,sessions,parent_session_id,payload.parent_thread_id|payload.source.subagent.thread_spawn.parent_thread_id,VARCHAR,first,session,
+codex,session_meta,sessions,forked_from_session_id,payload.forked_from_id,VARCHAR,first,session,
+codex,session_meta,sessions,agent_name,payload.agent_nickname,VARCHAR,first,session,
+codex,session_meta,sessions,agent_path,payload.agent_path,VARCHAR,first,session,
+codex,session_meta,sessions,agent_role,payload.agent_role,VARCHAR,first,session,
+codex,session_meta,sessions,cwd,payload.cwd,VARCHAR,first,session,
+codex,session_meta,sessions,git_branch,payload.git.branch,VARCHAR,first,session,
+codex,session_meta,sessions,git_commit,payload.git.commit_hash,VARCHAR,first,session,
+codex,session_meta,sessions,repository,payload.git.repository_url,VARCHAR,first,session,
+codex,session_meta,sessions,version,payload.cli_version,VARCHAR,first,session,
+codex,session_meta,sessions,client,payload.originator,VARCHAR,first,session,codex-tui / codex_exec / desktop
+codex,session_meta,sessions,thread_source,payload.thread_source|payload.source,VARCHAR,first,session,source object -> subagent
+codex,session_meta,sessions,model_provider,payload.model_provider,VARCHAR,first,session,
+codex,session_meta,sessions,started_at,payload.timestamp,VARCHAR,first,session,
+codex,*,sessions,ended_at,timestamp,VARCHAR,max,session,
+codex,session_index,sessions,title,thread_name|title,VARCHAR,,session,session_index.jsonl is its own entries row; joined on id
+codex,turn_context,turns,model,payload.model,VARCHAR,last,turn,
+codex,turn_context,turns,effort,payload.effort|payload.collaboration_mode.settings.reasoning_effort,VARCHAR,last,turn,
+codex,turn_context,turns,cwd,payload.cwd,VARCHAR,last,turn,
+codex,event_msg/task_started,turns,started_at,payload.started_at,BIGINT,,turn,
+codex,event_msg/task_complete,turns,ended_at,payload.completed_at,BIGINT,,turn,
+codex,event_msg/task_complete,turns,status,completed,VARCHAR,const,turn,
+codex,event_msg/task_complete,turns,last_message,payload.last_agent_message,VARCHAR,,turn,
+codex,event_msg/turn_aborted,turns,status,payload.reason,VARCHAR,,turn,
+claude,user,turns,turn_id,promptId,VARCHAR,,turn,Claude turns = promptId groups; started_at = first line ts
+codex,response_item/message,messages,role,payload.role,VARCHAR,,row,user/assistant/developer
+codex,response_item/message,messages,text,@block.text,VARCHAR,,row,
+codex,response_item/message,messages,phase,payload.phase,VARCHAR,,row,
+codex,response_item/agent_message,messages,text,payload.content[*].text,VARCHAR,join,row,inter-agent message
+codex,response_item/agent_message,messages,recipient,payload.recipient,VARCHAR,,row,
+codex,response_item/function_call|custom_tool_call,tool_calls,tool_use_id,payload.call_id,VARCHAR,,row,key
+codex,response_item/function_call|custom_tool_call,tool_calls,name,payload.name,VARCHAR,,row,
+codex,response_item/function_call,tool_calls,input,payload.arguments,JSON,,row,arguments is a JSON string -> cast
+codex,response_item/custom_tool_call,tool_calls,input,payload.input,VARCHAR,,row,freeform (apply_patch)
+codex,response_item/function_call,tool_calls,namespace,payload.namespace,VARCHAR,,row,
+codex,event_msg/item_completed/McpToolCall,tool_calls,tool_use_id,payload.item.id,VARCHAR,,row,result is on the same record -> also a tool_results row
+codex,event_msg/item_completed/McpToolCall,tool_calls,name,payload.item.tool,VARCHAR,,row,
+codex,event_msg/item_completed/McpToolCall,tool_calls,server,payload.item.server,VARCHAR,,row,
+codex,event_msg/item_completed/McpToolCall,tool_calls,input,payload.item.arguments,JSON,,row,
+codex,event_msg/item_completed/CommandExecution,tool_calls,input,payload.item.command,JSON,,row,
+codex,response_item/function_call_output|custom_tool_call_output,tool_results,tool_use_id,payload.call_id,VARCHAR,,row,key
+codex,response_item/function_call_output|custom_tool_call_output,tool_results,content,payload.output,VARCHAR,,row,
+codex,event_msg/item_completed/McpToolCall,tool_results,content,payload.item.result|payload.item.error,JSON,,row,
+codex,event_msg/item_completed/McpToolCall|CommandExecution,tool_results,status,payload.item.status,VARCHAR,,row,
+codex,event_msg/item_completed/CommandExecution,tool_results,content,payload.item.aggregated_output,VARCHAR,,row,
+codex,event_msg/item_completed/CommandExecution,tool_results,exit_code,payload.item.exit_code,BIGINT,,row,
+codex,response_item/reasoning,thinking,text,payload.summary[*].text,VARCHAR,join,row,
+codex,response_item/reasoning,thinking,redacted,payload.encrypted_content,VARCHAR,is not null,row,
+codex,event_msg/token_count,usage,input_tokens,payload.info.last_token_usage.input_tokens,BIGINT,,row,one row per response; key = (file_path line_number) - the response it follows is an ASOF join
+codex,event_msg/token_count,usage,output_tokens,payload.info.last_token_usage.output_tokens,BIGINT,,row,
+codex,event_msg/token_count,usage,cache_read_tokens,payload.info.last_token_usage.cached_input_tokens,BIGINT,,row,
+codex,event_msg/token_count,usage,cache_creation_tokens,payload.info.last_token_usage.cache_write_input_tokens,BIGINT,,row,
+codex,event_msg/token_count,usage,thinking_tokens,payload.info.last_token_usage.reasoning_output_tokens,BIGINT,,row,
+codex,event_msg/token_count,usage,model,@turns.model,VARCHAR,,lookup,
+codex,token_usage_record,usage,response_id,payload.response_id,VARCHAR,,row,newer format names its response directly
+codex,token_usage_record,usage,input_tokens,payload.usage.input_tokens,BIGINT,,row,
+codex,token_usage_record,usage,output_tokens,payload.usage.output_tokens,BIGINT,,row,
+codex,event_msg/*,system_events,subtype,payload.type,VARCHAR,,row,compaction_summary/paginated_history/thread_settings_applied/world_state/...
+codex,event_msg/*,system_events,content,payload.message,VARCHAR,,row,
+codex,event_msg/*,system_events,payload,payload,JSON,,row,long tail

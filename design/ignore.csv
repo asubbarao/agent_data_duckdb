@@ -1,0 +1,99 @@
+source,record_type,json_path,reason
+claude,*,isSidechain,implied by entries.is_subagent (subagents/ folder)
+claude,*,userType,always external in sample
+claude,*,session_id,snake_case duplicate of sessionId (358/465 assistant lines)
+claude,*,agentId,implied by the subagent file name (agent-<id>.jsonl)
+claude,assistant,message.type,always message
+claude,assistant,message.role,always assistant
+claude,assistant,message.container,null in sample
+claude,assistant,message.context_management,API echo; no analytical use found
+claude,assistant,message.diagnostics,API echo
+claude,assistant,message.stop_details,API echo; stop_reason carries the meaning
+claude,assistant,message.stop_sequence,API echo
+claude,assistant,message.input_transformations,API echo
+claude,assistant,message.usage.cache_creation,breakdown of cache_creation_input_tokens by TTL (sum equals the kept total)
+claude,assistant,message.usage.service_tier,constant
+claude,assistant,message.usage.inference_geo,constant
+claude,assistant,message.usage.server_tool_use,web search/fetch counts; add a usage column if wanted (one mapping row)
+claude,assistant,message.usage.speed,constant
+claude,assistant,message.usage.iterations,API echo
+claude,assistant,message.usage.fallback_credit,billing detail
+claude,assistant,@block.signature,opaque thinking signature (large)
+claude,assistant,@block.caller,always the model
+claude,assistant,apiBlockIndex,block position inside the API response (one block per line)
+claude,assistant,advisorModel,advisor bookkeeping
+claude,assistant,requestedModel,equals message.model on all 214 sampled lines
+claude,assistant,serverClassifierRequest,classifier bookkeeping
+claude,assistant,wireToolInputs,wire copy of tool inputs (duplicate of block.input)
+claude,assistant,wireIngestContext,wire bookkeeping
+claude,assistant,thinkingDurationMs,timing only; candidate thinking column if wanted
+claude,assistant,thinkingDisplay,UI setting
+claude,assistant,attributionMcpServer,attribution bookkeeping; candidate tool_calls column
+claude,assistant,attributionMcpTool,attribution bookkeeping
+claude,assistant,attributionSkill,attribution bookkeeping
+claude,assistant,attributionAgent,attribution bookkeeping
+claude,assistant,quotaLimits,account quota snapshot
+claude,user,sourceToolAssistantUUID,duplicate of parentUuid on tool_result lines
+claude,user,serverClassifierContext,classifier bookkeeping
+claude,user,permissionDecision,permission UI bookkeeping
+claude,user,mcpMeta,MCP transport metadata
+claude,user,queueSkipAttachments,queue bookkeeping
+claude,user,queueTranscriptOnly,queue bookkeeping
+claude,user,queuePriority,queue bookkeeping
+claude,user,turnPosition,turn bookkeeping
+claude,user,turnCompanion,turn bookkeeping
+claude,user,interruptedBySendNow,UI bookkeeping
+claude,user,toolDenialKind,kept only via toolUseResult when needed
+claude,user,toolEndsTurn,turn bookkeeping
+claude,user,toolUseResult.originalFile,full file body before an edit (large)
+claude,user,toolUseResult.structuredPatch,duplicate of the edit diff
+claude,attachment,attachment.snapshot,environment snapshot (paths; fixture marks it must-not-leak)
+claude,attachment,attachment.systemPrompt,full system prompt (large)
+claude,attachment,attachment.tools,tool definitions (large)
+claude,attachment,attachment.surfacedDefinitions,tool definitions (large)
+claude,attachment,renderedRole,always user
+claude,attachment,renderedBesideToolResult,render placement
+claude,attachment,renderedInHumanTurn,render placement
+claude,file-history-snapshot,snapshot,file backup index (file-history/ holds the bodies)
+claude,file-history-delta,backup,file backup index
+claude,atis-latch,atis,internal latch state
+claude,cost-state,*,cost snapshot; candidate sessions columns (totalCostUSD; totalLinesAdded) if wanted
+claude,bridge-session,lastSequenceNum,bridge transport counter
+claude,bridge-session,ownerAccountUuid,account identifier
+claude,bridge-session,ownerOrganizationUuid,account identifier
+codex,*,metadata,client bookkeeping (client_authored; user_input_order; retained_source)
+codex,*,payload.internal_chat_message_metadata_passthrough.create_time,duplicate of timestamp
+codex,*,payload.internal_chat_message_metadata_passthrough.content_item_kinds,derivable from blocks
+codex,session_meta,payload.base_instructions,full system prompt (large)
+codex,session_meta,payload.creator_user_id,account identifier
+codex,session_meta,payload.creator_account_id,account identifier
+codex,session_meta,payload.runtime_workspace_roots,sandbox config
+codex,session_meta,payload.history_mode,client setting
+codex,session_meta,payload.multi_agent_version,client setting
+codex,session_meta,payload.subagent_history_start_ordinal,ordinal where a forked child's own lines begin (use to drop replayed parent history if wanted)
+codex,session_meta,payload.context_window,model limit
+codex,turn_context,payload.sandbox_policy,sandbox config
+codex,turn_context,payload.permission_profile,sandbox config
+codex,turn_context,payload.active_permission_profile,sandbox config
+codex,turn_context,payload.approval_policy,client setting
+codex,turn_context,payload.approvals_reviewer,client setting
+codex,turn_context,payload.comp_hash,client hash
+codex,turn_context,payload.disabled_plugin_ids,client setting
+codex,turn_context,payload.cyber_access_program,client setting
+codex,turn_context,payload.personality,client setting
+codex,turn_context,payload.timezone,client setting
+codex,turn_context,payload.current_date,client setting
+codex,turn_context,payload.workspace_roots,sandbox config
+codex,turn_context,payload.realtime_active,client setting
+codex,turn_context,payload.summary,reasoning-summary setting
+codex,response_item/reasoning,payload.encrypted_content,opaque (kept only as thinking.redacted flag)
+codex,event_msg/token_count,payload.rate_limits,account quota snapshot
+codex,event_msg/token_count,payload.info.total_token_usage,running total (thread totals come from usage sums)
+codex,event_msg/token_count,payload.info.model_context_window,model limit
+codex,event_msg/item_completed,payload.started_at_ms,timing; candidate tool_results column
+codex,event_msg/item_completed,payload.completed_at_ms,timing; candidate tool_results column
+codex,event_msg/item_completed/*,payload.item.parsed_cmd,parsed duplicate of command
+codex,event_msg/item_completed/*,payload.item.memory_citation,client bookkeeping
+codex,world_state,payload.full,workspace snapshot (large)
+codex,realtime_item/*,payload,voice-session bookkeeping
+codex,inter_agent_communication_metadata,payload.trigger_turn,kept in system_events.payload
